@@ -7,6 +7,7 @@ Some fun ways to look at numbers — interactive and static visualizations of pr
 | File | Description |
 |------|-------------|
 | `prime_visualizer.py` | Interactive visualizer with controls for spiral type, colour mode, and size |
+| `spiral_explorer.py` | Interactive Vogel spiral explorer with adjustable r, θ, dot size, and colour |
 | `prime_gallery_100.py` | Static three-panel figure showing integers 1–100 across all three spirals |
 
 ---
@@ -61,6 +62,37 @@ A matplotlib window opens with three control panels on the right:
 **Reset zoom** — returns the view to fit all points
 
 **Zoom and pan** with standard matplotlib toolbar controls. At high zoom on the Ulam spiral, individual numbers appear as labels inside their cells.
+
+---
+
+### Spiral explorer — `spiral_explorer.py`
+
+```bash
+conda activate maths_fun
+python spiral_explorer.py
+```
+
+Explore generalised spirals of the form `r = k^p`, `θ = k × angle°` interactively.
+At `p = 0.5` and `angle ≈ 137.508°` you recover the classic Vogel sunflower.
+
+**Spiral parameters**
+- **N points** — number of integers to plot (up to 100,000)
+- **r = k ^ p** — controls how quickly the spiral expands (0.1 = tight, 3.0 = very open)
+- **θ step (°)** — angle between consecutive integers; try values near 137.5° for sunflower patterns, or round numbers (60°, 90°, 120°) for symmetric arms
+- **Sunflower ★** — preset to golden angle (≈ 137.508°), `p = 0.5`
+- **Alt. golden** — preset to 360° − golden angle (≈ 222.492°), same distribution with opposite winding
+
+**Visual style**
+- **Dot size** — size of each plotted point
+- **Line width / Line alpha** — thickness and transparency of the connecting sequence line
+- **Line: OFF/ON** — toggle the line connecting consecutive integers
+
+**Colour mode**
+- **Primes** — primes in gold, composites dim
+- **Twin primes** — twin prime pairs in pink, other primes in gold
+- **Gradient** — colour by position in the sequence (plasma colormap)
+- **Mod 6** — colour by remainder mod 6
+- **Mod 12** — colour by remainder mod 12
 
 ---
 
