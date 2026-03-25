@@ -8,6 +8,7 @@ Some fun ways to look at numbers — interactive and static visualizations of pr
 |------|-------------|
 | `prime_visualizer.py` | Interactive visualizer with controls for spiral type, colour mode, and size |
 | `spiral_explorer.py` | Interactive Vogel spiral explorer with adjustable r, θ, dot size, and colour |
+| `spiral_artist.py` | Pure spirograph explorer — gradient coloring, keyboard input, high-res PNG export |
 | `prime_gallery_100.py` | Static three-panel figure showing integers 1–100 across all three spirals |
 
 ---
@@ -93,6 +94,41 @@ At `p = 0.5` and `angle ≈ 137.508°` you recover the classic Vogel sunflower.
 - **Gradient** — colour by position in the sequence (plasma colormap)
 - **Mod 6** — colour by remainder mod 6
 - **Mod 12** — colour by remainder mod 12
+
+---
+
+### Spiral artist — `spiral_artist.py`
+
+```bash
+conda activate maths_fun
+python spiral_artist.py
+```
+
+Pure spirograph explorer built on the same formula (`r = k^p`, `θ = k × angle°`) but focused entirely on aesthetics. No prime-number content — every point is coloured by its position in the sequence using a gradient.
+
+**Spiral formula**
+- **N** — number of points (up to 100,000)
+- **k ^ p** — r exponent; 0.5 = slow outward growth, 1.0 = linear, 2.0 = fast
+- **θ (°)** — angle step per integer; golden angle ≈ 137.508° gives even coverage, round numbers create symmetric arms
+
+Each slider has a **text box** on its right — type an exact value and press Enter to jump precisely to it.
+
+**Presets**
+- **Sunflower ★** — golden angle, p = 0.5
+- **Alt. golden** — 360° − golden angle, p = 0.5 (opposite winding)
+- **Pentagon** — 144°, p = 0.5 (5-arm star pattern)
+- **Galaxy** — golden angle, p = 1.0 (stretched radially)
+
+**Visual style**
+- **Line w / Alpha** — width and transparency of the gradient connecting line
+- **Dot sz** — size of individual point markers
+- **Dots / Line / Both** — show dots only, the gradient line only, or both
+
+**Palette** — choose the gradient colormap: plasma, viridis, inferno, rainbow, cool, twilight. **Reverse** flips the direction of the gradient along the sequence.
+
+**Export**
+- Select output DPI: 150 (screen), 300 (print), 600 (high detail)
+- Click **Export PNG** to save a clean `12 × 12 inch` image (no axes, no widgets) to the current directory. The filename encodes the current parameters.
 
 ---
 
