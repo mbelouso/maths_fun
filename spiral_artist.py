@@ -9,7 +9,8 @@ Controls
   Spiral formula : N points, r exponent (p), θ step (°) — sliders with keyboard input
   Presets        : Sunflower | Alt. golden | Pentagon | Galaxy
   Visual style   : line width, line alpha, dot size; display mode (Dots | Line | Both)
-  Palette        : plasma | viridis | inferno | rainbow | cool | twilight + reverse
+  Palette        : 10 gradient colormaps + reverse
+  Background     : Dark | Light
   Export         : save high-resolution PNG at 150 / 300 / 600 dpi
 
 Usage
@@ -23,16 +24,18 @@ from matplotlib.collections import LineCollection
 from matplotlib.widgets import Slider, RadioButtons, Button, TextBox
 import matplotlib.gridspec as gridspec
 
-# ── Palette ────────────────────────────────────────────────────────────────────
+# ── UI colours (control panel — always dark) ───────────────────────────────────
 
-BG      = "#0d0d1a"
 CTRL_BG = "#12122a"
 CTRL_FG = "#ccccee"
 ACC_C   = "#7788ff"
 GOLD    = "#FFD700"
-
 BTN_OFF = "#1a1a3e"
 BTN_ON  = "#1a3a50"
+
+# Plot background options
+DARK_BG  = "#0d0d1a"
+LIGHT_BG = "#f5f5f0"
 
 GOLDEN_ANGLE = 180.0 * (3.0 - np.sqrt(5.0))   # ≈ 137.508°
 ALT_GOLDEN   = 360.0 - GOLDEN_ANGLE            # ≈ 222.492°
@@ -41,19 +44,23 @@ ALT_GOLDEN   = 360.0 - GOLDEN_ANGLE            # ≈ 222.492°
 # ── Main class ─────────────────────────────────────────────────────────────────
 
 class SpiralArtist:
-    MAX_N    = 100_000
-    PALETTES = ["plasma", "viridis", "inferno", "rainbow", "cool", "twilight"]
+    MAX_N = 100_000
+    PALETTES = [
+        "plasma", "viridis", "inferno", "magma", "turbo",
+        "rainbow", "cool", "twilight", "hot", "hsv",
+    ]
 
     DEFAULTS = dict(
-        n          = 3_000,
-        r_exp      = 0.5,
-        angle      = GOLDEN_ANGLE,
-        line_width = 1.0,
-        line_alpha = 0.85,
-        dot_size   = 3.0,
-        mode       = "Line",
-        palette    = "plasma",
+        n           = 3_000,
+        r_exp       = 0.5,
+        angle       = GOLDEN_ANGLE,
+        line_width  = 1.0,
+        line_alpha  = 0.85,
+        dot_size    = 3.0,
+        mode        = "Line",
+        palette     = "plasma",
         reverse_pal = False,
+        plot_bg     = DARK_BG,
         export_dpi  = 300,
     )
 
@@ -64,9 +71,6 @@ class SpiralArtist:
         self._batch   = False
         self._drawing = False
 
-        # TextBox refs — assigned in _build_figure
-        self.tb_n = self.tb_rexp = self.tb_angle = self.tb_lw = None
-
         self._build_figure()
         self._draw()
 
@@ -74,15 +78,15 @@ class SpiralArtist:
 
     def _build_figure(self):
         plt.rcParams.update({
-            "figure.facecolor": BG,
-            "axes.facecolor":   BG,
+            "figure.facecolor": CTRL_BG,
+            "axes.facecolor":   CTRL_BG,
             "axes.edgecolor":   "#334",
             "text.color":       CTRL_FG,
             "xtick.color":      "#556",
             "ytick.color":      "#556",
         })
 
-        self.fig = plt.figure(figsize=(15, 9), facecolor=BG)
+        self.fig = plt.figure(figsize=(15, 9), facecolor=CTRL_BG)
         if self.fig.canvas.manager is not None:
             self.fig.canvas.manager.set_window_title("Spiral Artist")
 
@@ -90,20 +94,21 @@ class SpiralArtist:
             1, 2, width_ratios=[3, 1],
             left=0.03, right=0.98, top=0.94, bottom=0.04, wspace=0.04,
         )
-        self.ax = self.fig.add_subplot(outer[0], facecolor=BG)
+        self.ax = self.fig.add_subplot(outer[0], facecolor=self.plot_bg)
 
         heights = [
-            0.4, 1.3, 1.3, 1.3,          # header + N, p, angle
-            1.0,                           # presets 2×2
-            0.4, 1.3, 1.1, 1.1,           # header + line_width, line_alpha, dot_size
-            1.0,                           # display mode buttons
-            0.4, 3.2,                      # palette header + radio
-            0.9,                           # reverse button
-            0.35, 1.5,                     # export header + export row
+            0.4, 1.3, 1.3, 1.3,   # "Spiral formula" header + N, p, angle
+            1.1,                    # presets 2×2
+            0.4, 1.3, 1.1, 1.1,   # "Visual style" header + lw, alpha, dotsize
+            1.0,                    # display mode buttons
+            0.4, 5.2,              # "Palette" header + 10-item radio
+            0.9,                    # reverse button
+            0.4, 1.0,              # "Background" header + dark/light buttons
+            0.35, 1.5,             # "Export" header + export row
         ]
         ctrl = gridspec.GridSpecFromSubplotSpec(
             len(heights), 1, subplot_spec=outer[1],
-            hspace=0.28, height_ratios=heights,
+            hspace=0.25, height_ratios=heights,
         )
 
         def hdr(row, text):
@@ -137,45 +142,44 @@ class SpiralArtist:
         ax_p2 = ax_pre.inset_axes([0.01, 0.04, 0.48, 0.44])
         ax_p3 = ax_pre.inset_axes([0.51, 0.04, 0.48, 0.44])
 
-        btn_sun  = plain_btn(ax_p0, "Sunflower \u2605")
-        btn_alt  = plain_btn(ax_p1, "Alt. golden")
-        btn_pent = plain_btn(ax_p2, "Pentagon")
-        btn_gal  = plain_btn(ax_p3, "Galaxy")
+        # Store as instance attrs to prevent garbage collection
+        self._btn_sun  = plain_btn(ax_p0, "Sunflower \u2605")
+        self._btn_alt  = plain_btn(ax_p1, "Alt. golden")
+        self._btn_pent = plain_btn(ax_p2, "Pentagon")
+        self._btn_gal  = plain_btn(ax_p3, "Galaxy")
 
-        btn_sun.on_clicked( lambda _: self._preset(GOLDEN_ANGLE, 0.5))
-        btn_alt.on_clicked( lambda _: self._preset(ALT_GOLDEN,   0.5))
-        btn_pent.on_clicked(lambda _: self._preset(144.0,         0.5))
-        btn_gal.on_clicked( lambda _: self._preset(GOLDEN_ANGLE,  1.0))
+        self._btn_sun.on_clicked( lambda _: self._preset(GOLDEN_ANGLE, 0.5))
+        self._btn_alt.on_clicked( lambda _: self._preset(ALT_GOLDEN,   0.5))
+        self._btn_pent.on_clicked(lambda _: self._preset(144.0,         0.5))
+        self._btn_gal.on_clicked( lambda _: self._preset(GOLDEN_ANGLE,  1.0))
 
         # ── Visual style ─────────────────────────────────────────────────────
         hdr(5, "Visual style")
 
-        self.sl_lw,   self.tb_lw = self._slider_tb_row(ctrl, 6,
+        self.sl_lw, self.tb_lw = self._slider_tb_row(ctrl, 6,
             "Line w", 0.1, 8.0, self.line_width, "%.1f", float, "line_width")
 
-        # Line alpha — slider only (no text box needed for 0-1 range)
         ax_la = self.fig.add_subplot(ctrl[7], facecolor=CTRL_BG)
         self.sl_la = self._plain_slider(ax_la, "Alpha", 0.0, 1.0,
                                         self.line_alpha, "%.2f")
         self.sl_la.on_changed(lambda v: self._set(line_alpha=float(v)))
 
-        # Dot size — slider only
         ax_ds = self.fig.add_subplot(ctrl[8], facecolor=CTRL_BG)
         self.sl_ds = self._plain_slider(ax_ds, "Dot sz", 0.5, 30.0,
                                         self.dot_size, "%.1f")
         self.sl_ds.on_changed(lambda v: self._set(dot_size=float(v)))
 
-        # Display mode: three buttons
+        # Display mode buttons
         ax_mode = self.fig.add_subplot(ctrl[9], facecolor=CTRL_BG)
         ax_mode.set_axis_off()
-        ax_d = ax_mode.inset_axes([0.01, 0.1, 0.32, 0.8])
-        ax_l = ax_mode.inset_axes([0.34, 0.1, 0.32, 0.8])
-        ax_b = ax_mode.inset_axes([0.67, 0.1, 0.32, 0.8])
+        ax_md = ax_mode.inset_axes([0.01, 0.1, 0.32, 0.8])
+        ax_ml = ax_mode.inset_axes([0.34, 0.1, 0.32, 0.8])
+        ax_mb = ax_mode.inset_axes([0.67, 0.1, 0.32, 0.8])
 
         self._mode_btns = {
-            "Dots": plain_btn(ax_d, "Dots", self.mode == "Dots"),
-            "Line": plain_btn(ax_l, "Line", self.mode == "Line"),
-            "Both": plain_btn(ax_b, "Both", self.mode == "Both"),
+            "Dots": plain_btn(ax_md, "Dots", self.mode == "Dots"),
+            "Line": plain_btn(ax_ml, "Line", self.mode == "Line"),
+            "Both": plain_btn(ax_mb, "Both", self.mode == "Both"),
         }
         for label, btn in self._mode_btns.items():
             btn.on_clicked(lambda _, lbl=label: self._set_mode(lbl))
@@ -190,16 +194,27 @@ class SpiralArtist:
         )
         for lbl in self.radio_pal.labels:
             lbl.set_color(CTRL_FG)
-            lbl.set_fontsize(9)
+            lbl.set_fontsize(8.5)
         self.radio_pal.on_clicked(lambda lbl: self._set(palette=lbl))
 
         ax_rev = self.fig.add_subplot(ctrl[12], facecolor=CTRL_BG)
         self.btn_reverse = plain_btn(ax_rev, "Reverse: OFF")
         self.btn_reverse.on_clicked(self._toggle_reverse)
 
+        # ── Background ───────────────────────────────────────────────────────
+        hdr(13, "Background")
+        ax_bg = self.fig.add_subplot(ctrl[14], facecolor=CTRL_BG)
+        ax_bg.set_axis_off()
+        ax_bk = ax_bg.inset_axes([0.01, 0.1, 0.48, 0.8])
+        ax_bw = ax_bg.inset_axes([0.51, 0.1, 0.48, 0.8])
+        self._btn_bg_dark  = plain_btn(ax_bk, "Dark",  active=True)
+        self._btn_bg_light = plain_btn(ax_bw, "Light", active=False)
+        self._btn_bg_dark.on_clicked( lambda _: self._set_bg(DARK_BG))
+        self._btn_bg_light.on_clicked(lambda _: self._set_bg(LIGHT_BG))
+
         # ── Export ───────────────────────────────────────────────────────────
-        hdr(13, "Export")
-        ax_exp = self.fig.add_subplot(ctrl[14], facecolor=CTRL_BG)
+        hdr(15, "Export")
+        ax_exp = self.fig.add_subplot(ctrl[16], facecolor=CTRL_BG)
         ax_exp.set_axis_off()
 
         ax_d150 = ax_exp.inset_axes([0.01, 0.52, 0.30, 0.44])
@@ -227,7 +242,7 @@ class SpiralArtist:
     # ── Widget helpers ────────────────────────────────────────────────────────
 
     def _slider_tb_row(self, ctrl, row, label, vmin, vmax, vinit, fmt, cast, attr):
-        """One GridSpec row split 62% slider / 33% TextBox. Returns (slider, textbox)."""
+        """One GridSpec row: 62% slider + 33% TextBox. Returns (slider, textbox)."""
         ax_row = self.fig.add_subplot(ctrl[row], facecolor=CTRL_BG)
         ax_row.set_axis_off()
         ax_sl = ax_row.inset_axes([0.00, 0.05, 0.62, 0.90])
@@ -252,10 +267,9 @@ class SpiralArtist:
             try:
                 v = float(text.strip())
                 v = max(vmin, min(vmax, v))
-                # set_val triggers on_sl_changed which redraws
-                sl.set_val(cast(v))
+                sl.set_val(cast(v))         # triggers on_sl_changed → redraw
             except ValueError:
-                tb.set_val(fmt % getattr(self, attr))   # revert
+                tb.set_val(fmt % getattr(self, attr))   # revert bad input
 
         sl.on_changed(on_sl_changed)
         tb.on_submit(on_tb_submit)
@@ -285,7 +299,7 @@ class SpiralArtist:
     # ── Draw helpers ──────────────────────────────────────────────────────────
 
     def _draw_gradient_line(self, ax, xs, ys):
-        n = len(xs)
+        n        = len(xs)
         points   = np.column_stack([xs, ys]).reshape(-1, 1, 2)
         segments = np.concatenate([points[:-1], points[1:]], axis=1)
         colors   = self._palette_colors(n)
@@ -317,7 +331,7 @@ class SpiralArtist:
         self._drawing = True
 
         self.ax.cla()
-        self.ax.set_facecolor(BG)
+        self.ax.set_facecolor(self.plot_bg)
         self.ax.set_aspect("equal")
         for sp in self.ax.spines.values():
             sp.set_visible(False)
@@ -348,18 +362,16 @@ class SpiralArtist:
         self._draw()
 
     def _preset(self, angle, r_exp):
-        """Apply a preset; single redraw via _batch flag."""
+        """Apply a two-parameter preset with a single redraw."""
         self._batch = True
         self.angle  = angle
         self.r_exp  = r_exp
         self.sl_angle.set_val(angle)
         self.sl_rexp.set_val(r_exp)
         self._batch = False
-        # Sync textboxes manually (slider on_changed was suppressed)
-        if self.tb_angle is not None:
-            self.tb_angle.set_val("%.3f" % angle)
-        if self.tb_rexp is not None:
-            self.tb_rexp.set_val("%.2f" % r_exp)
+        # Sync textboxes manually (on_changed was suppressed during batch)
+        self.tb_angle.set_val("%.3f" % angle)
+        self.tb_rexp.set_val("%.2f"  % r_exp)
         self._draw()
 
     def _toggle_reverse(self, _event):
@@ -368,6 +380,13 @@ class SpiralArtist:
         self.btn_reverse.label.set_text(
             "Reverse: ON" if self.reverse_pal else "Reverse: OFF"
         )
+        self._draw()
+
+    def _set_bg(self, color):
+        self.plot_bg = color
+        is_dark = (color == DARK_BG)
+        self._btn_bg_dark.ax.set_facecolor( BTN_ON  if is_dark else BTN_OFF)
+        self._btn_bg_light.ax.set_facecolor(BTN_OFF if is_dark else BTN_ON)
         self._draw()
 
     def _set_dpi(self, dpi):
@@ -380,21 +399,22 @@ class SpiralArtist:
         dpi  = self.export_dpi
         size = 12   # inches → 1800 / 3600 / 7200 px at 150 / 300 / 600 dpi
 
-        fig = plt.figure(figsize=(size, size), facecolor="black")
-        ax  = fig.add_axes([0, 0, 1, 1], facecolor="black")
+        fig = plt.figure(figsize=(size, size), facecolor=self.plot_bg)
+        ax  = fig.add_axes([0, 0, 1, 1], facecolor=self.plot_bg)
         ax.set_aspect("equal")
         ax.axis("off")
 
         self._draw_spiral(ax)
 
-        pal  = self.palette[:4]
-        rev  = "r" if self.reverse_pal else ""
+        pal   = self.palette[:4]
+        rev   = "r" if self.reverse_pal else ""
+        bg    = "lite" if self.plot_bg == LIGHT_BG else "dark"
         fname = (
             f"spiral_{self.angle:.2f}deg"
             f"_p{self.r_exp:.2f}"
             f"_N{self.n}"
             f"_{pal}{rev}"
-            f"_{dpi}dpi.png"
+            f"_{bg}_{dpi}dpi.png"
         )
         fig.savefig(fname, dpi=dpi, bbox_inches="tight", pad_inches=0.05)
         plt.close(fig)
