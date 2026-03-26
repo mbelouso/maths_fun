@@ -9,6 +9,7 @@ Some fun ways to look at numbers — interactive and static visualizations of pr
 | `prime_visualizer.py` | Interactive visualizer with controls for spiral type, colour mode, and size |
 | `spiral_explorer.py` | Interactive Vogel spiral explorer with adjustable r, θ, dot size, and colour |
 | `spiral_artist.py` | Pure spirograph explorer — gradient coloring, keyboard input, high-res PNG export |
+| `spiral_duo.py` | Dual-spiral PyQt5 viewer — two independent spirals with live alpha blend, parallel rendering |
 | `prime_gallery_100.py` | Static three-panel figure showing integers 1–100 across all three spirals |
 
 ---
@@ -129,6 +130,36 @@ Each slider has a **text box** on its right — type an exact value and press En
 **Export**
 - Select output DPI: 150 (screen), 300 (print), 600 (high detail)
 - Click **Export PNG** to save a clean `12 × 12 inch` image (no axes, no widgets) to the current directory. The filename encodes the current parameters.
+
+---
+
+### Dual spiral viewer — `spiral_duo.py`
+
+```bash
+conda activate maths_fun
+pip install PyQt5   # first time only
+python spiral_duo.py
+```
+
+Two fully independent spirals rendered simultaneously and alpha-blended together in a PyQt5 window. Both spirals are drawn in parallel using a `ThreadPoolExecutor`, keeping the UI responsive while rendering.
+
+**Blend slider** — cross-fades between the two spirals:
+- 0 = only Spiral 1 visible
+- 0.5 = both at equal weight
+- 1 = only Spiral 2 visible
+
+**Spiral 1 / Spiral 2 tabs** — each spiral has its own independent set of controls:
+- **N, p, θ** — formula parameters (slider + spinbox for precise entry)
+- **Presets** — Sunflower ★, Alt. golden, Pentagon, Galaxy
+- **Line width, Alpha, Dot size** — visual style
+- **Dots / Line / Both** — display mode
+- **Palette** — 10 gradient colormaps + reverse toggle
+
+**Background** — Dark or Light.
+
+**Export PNG** — renders a clean 12 × 12 inch image at the chosen DPI to the current directory. Rendering runs off the main thread so the UI stays live.
+
+Default startup: Spiral 1 at golden angle (plasma), Spiral 2 at alternate golden angle (viridis), blend at 0.5 — two complementary sunflowers overlaid.
 
 ---
 
