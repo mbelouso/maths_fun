@@ -64,6 +64,16 @@ PRESETS = [
     ("Galaxy",       GOLDEN_ANGLE, 1.0),
 ]
 
+# (label, pixel_width, pixel_height)
+EXPORT_RESOLUTIONS = [
+    ("HD   1280×720",   1280,  720),
+    ("FHD  1920×1080",  1920, 1080),
+    ("QHD  2560×1440",  2560, 1440),
+    ("4K   3840×2160",  3840, 2160),
+    ("Sq   2000×2000",  2000, 2000),
+    ("Sq   4000×4000",  4000, 4000),
+]
+
 # ── Stylesheet (dark theme) ────────────────────────────────────────────────────
 
 STYLE = """
@@ -191,7 +201,8 @@ def _draw_spiral(ax, params: SpiralParams, global_alpha: float) -> None:
 
 
 def render_combined(p1: SpiralParams, p2: SpiralParams, blend: float,
-                    bg_rgb: tuple, width: int, height: int) -> np.ndarray:
+                    bg_rgb: tuple, width: int, height: int,
+                    transparent: bool = False) -> np.ndarray:
     """
     Render both spirals onto one shared axes and return a (H × W × 4) uint8
     RGBA array. Thread-safe: creates its own Figure/Canvas.
@@ -204,9 +215,14 @@ def render_combined(p1: SpiralParams, p2: SpiralParams, blend: float,
         blend=0   → only spiral 1 visible
         blend=0.5 → both at full opacity
         blend=1   → only spiral 2 visible
+
+    transparent=True → figure and axes background are fully transparent (RGBA
+        export); for the live preview the widget background shows through.
     """
-    dpi  = 96
-    bg_f = (bg_rgb[0] / 255.0, bg_rgb[1] / 255.0, bg_rgb[2] / 255.0, 1.0)
+    dpi = 96
+    bg_f = (0.0, 0.0, 0.0, 0.0) if transparent else (
+        bg_rgb[0] / 255.0, bg_rgb[1] / 255.0, bg_rgb[2] / 255.0, 1.0
+    )
 
     fig    = Figure(figsize=(width / dpi, height / dpi), dpi=dpi)
     fig.set_facecolor(bg_f)
@@ -214,6 +230,8 @@ def render_combined(p1: SpiralParams, p2: SpiralParams, blend: float,
 
     ax = fig.add_axes([0.0, 0.0, 1.0, 1.0])
     ax.set_facecolor(bg_f)
+    if transparent:
+        ax.patch.set_alpha(0.0)
     ax.set_aspect("equal")
     ax.axis("off")
 
@@ -241,18 +259,21 @@ class ExportSignals(QObject):
 
 class RenderWorker(QRunnable):
     def __init__(self, p1: SpiralParams, p2: SpiralParams,
-                 blend: float, bg_rgb: tuple, width: int, height: int):
+                 blend: float, bg_rgb: tuple, width: int, height: int,
+                 transparent: bool = False):
         super().__init__()
-        self.p1, self.p2 = p1, p2
-        self.blend       = blend
-        self.bg_rgb      = bg_rgb
-        self.W, self.H   = width, height
-        self.signals     = RenderSignals()
+        self.p1, self.p2    = p1, p2
+        self.blend          = blend
+        self.bg_rgb         = bg_rgb
+        self.W, self.H      = width, height
+        self.transparent    = transparent
+        self.signals        = RenderSignals()
         self.setAutoDelete(True)
 
     @pyqtSlot()
     def run(self):
-        arr  = render_combined(self.p1, self.p2, self.blend, self.bg_rgb, self.W, self.H)
+        arr  = render_combined(self.p1, self.p2, self.blend, self.bg_rgb,
+                               self.W, self.H, self.transparent)
         qimg = QImage(arr.data, self.W, self.H, arr.strides[0], QImage.Format_RGBA8888)
         self.signals.finished.emit(qimg.copy())
 
@@ -260,23 +281,28 @@ class RenderWorker(QRunnable):
 
 class ExportWorker(QRunnable):
     def __init__(self, p1: SpiralParams, p2: SpiralParams,
-                 blend: float, bg_rgb: tuple, dpi: int):
+                 blend: float, bg_rgb: tuple,
+                 width: int, height: int, transparent: bool = False):
         super().__init__()
-        self.p1, self.p2 = p1, p2
-        self.blend   = blend
-        self.bg_rgb  = bg_rgb
-        self.dpi     = dpi
-        self.signals = ExportSignals()
+        self.p1, self.p2    = p1, p2
+        self.blend          = blend
+        self.bg_rgb         = bg_rgb
+        self.W, self.H      = width, height
+        self.transparent    = transparent
+        self.signals        = ExportSignals()
         self.setAutoDelete(True)
 
     @pyqtSlot()
     def run(self):
-        px  = 12 * self.dpi
-        arr = render_combined(self.p1, self.p2, self.blend, self.bg_rgb, px, px)
-        bg    = "lite" if self.bg_rgb == LIGHT_BG else "dark"
+        arr = render_combined(self.p1, self.p2, self.blend, self.bg_rgb,
+                              self.W, self.H, self.transparent)
+        if self.transparent:
+            bg_tag = "transparent"
+        else:
+            bg_tag = "lite" if self.bg_rgb == LIGHT_BG else "dark"
         fname = (f"duo_{self.p1.angle:.2f}v{self.p2.angle:.2f}deg"
-                 f"_blend{self.blend:.2f}_{bg}_{self.dpi}dpi.png")
-        qimg = QImage(arr.data, px, px, arr.strides[0], QImage.Format_RGBA8888)
+                 f"_blend{self.blend:.2f}_{bg_tag}_{self.W}x{self.H}.png")
+        qimg = QImage(arr.data, self.W, self.H, arr.strides[0], QImage.Format_RGBA8888)
         qimg.copy().save(fname)
         self.signals.done.emit(fname)
 
@@ -539,8 +565,9 @@ class SpiralDuo(QMainWindow):
         self.setWindowTitle("Spiral Duo")
         self.resize(1400, 860)
 
-        self._blend  = 0.5
-        self._bg_rgb = DARK_BG
+        self._blend       = 0.5
+        self._bg_rgb      = DARK_BG
+        self._transparent = False
 
         self._pool = QThreadPool.globalInstance()
         self._pool.setMaxThreadCount(4)
@@ -611,24 +638,29 @@ class SpiralDuo(QMainWindow):
 
         bg_row = QHBoxLayout()
         bg_row.addWidget(QLabel("Background"))
-        self._btn_dark  = QPushButton("Dark");  self._btn_dark.setCheckable(True);  self._btn_dark.setChecked(True)
-        self._btn_light = QPushButton("Light"); self._btn_light.setCheckable(True)
+        self._btn_dark   = QPushButton("Dark");        self._btn_dark.setCheckable(True);  self._btn_dark.setChecked(True)
+        self._btn_light  = QPushButton("Light");       self._btn_light.setCheckable(True)
+        self._btn_transp = QPushButton("Transparent"); self._btn_transp.setCheckable(True)
         bg_grp = QButtonGroup(self); bg_grp.setExclusive(True)
         bg_grp.addButton(self._btn_dark)
         bg_grp.addButton(self._btn_light)
-        self._btn_dark.clicked.connect( lambda: self._set_bg(DARK_BG))
-        self._btn_light.clicked.connect(lambda: self._set_bg(LIGHT_BG))
+        bg_grp.addButton(self._btn_transp)
+        self._btn_dark.clicked.connect(  lambda: self._set_bg(DARK_BG,  False))
+        self._btn_light.clicked.connect( lambda: self._set_bg(LIGHT_BG, False))
+        self._btn_transp.clicked.connect(lambda: self._set_bg(DARK_BG,  True))
         bg_row.addWidget(self._btn_dark)
         bg_row.addWidget(self._btn_light)
+        bg_row.addWidget(self._btn_transp)
         bot_vb.addLayout(bg_row)
 
         exp_row = QHBoxLayout()
-        self.dpi_box = QComboBox()
-        self.dpi_box.addItems(["150 dpi", "300 dpi", "600 dpi"])
-        self.dpi_box.setCurrentIndex(1)
+        self.res_box = QComboBox()
+        for label, _, _ in EXPORT_RESOLUTIONS:
+            self.res_box.addItem(label)
+        self.res_box.setCurrentIndex(1)   # default FHD 1920×1080
         self.export_btn = QPushButton("Export PNG")
         self.export_btn.clicked.connect(self._export)
-        exp_row.addWidget(self.dpi_box)
+        exp_row.addWidget(self.res_box)
         exp_row.addWidget(self.export_btn, 1)
         bot_vb.addLayout(exp_row)
 
@@ -644,8 +676,9 @@ class SpiralDuo(QMainWindow):
         self._blend = v
         self._schedule_render()
 
-    def _set_bg(self, rgb: tuple):
-        self._bg_rgb = rgb
+    def _set_bg(self, rgb: tuple, transparent: bool):
+        self._bg_rgb      = rgb
+        self._transparent = transparent
         self._schedule_render()
 
     def _do_render(self):
@@ -656,6 +689,7 @@ class SpiralDuo(QMainWindow):
         worker = RenderWorker(
             self.panel1.params(), self.panel2.params(),
             self._blend, self._bg_rgb, W, H,
+            transparent=self._transparent,
         )
         self._workers.add(worker)
         worker.signals.finished.connect(
@@ -677,10 +711,11 @@ class SpiralDuo(QMainWindow):
     # ── Export ────────────────────────────────────────────────────────────────
 
     def _export(self):
-        dpi = int(self.dpi_box.currentText().split()[0])
+        _, W, H = EXPORT_RESOLUTIONS[self.res_box.currentIndex()]
         worker = ExportWorker(
             self.panel1.params(), self.panel2.params(),
-            self._blend, self._bg_rgb, dpi,
+            self._blend, self._bg_rgb, W, H,
+            transparent=self._transparent,
         )
         self._workers.add(worker)
         worker.signals.done.connect(
