@@ -1,6 +1,6 @@
 # maths_fun
 
-Some fun ways to look at numbers — interactive and static visualizations of prime numbers arranged in spiral patterns.
+Some fun ways to look at numbers and shapes — interactive visualizations of prime number spirals, generalised spirals, and geometric spirographs.
 
 ## Programs
 
@@ -10,6 +10,7 @@ Some fun ways to look at numbers — interactive and static visualizations of pr
 | `spiral_explorer.py` | Interactive Vogel spiral explorer with adjustable r, θ, dot size, and colour |
 | `spiral_artist.py` | Pure spirograph explorer — gradient coloring, keyboard input, high-res PNG export |
 | `spiral_duo.py` | Dual-spiral PyQt5 viewer — two independent spirals with live alpha blend, parallel rendering |
+| `spirograph.py` | Interactive gear-based spirograph — hypotrochoid/epitrochoid, animated gear overlay, PNG export |
 | `prime_gallery_100.py` | Static three-panel figure showing integers 1–100 across all three spirals |
 
 ---
@@ -32,7 +33,7 @@ pip install -r requirements.txt
 Or manually:
 
 ```bash
-pip install numpy matplotlib
+pip install numpy matplotlib pygame PyQt5
 ```
 
 ---
@@ -137,7 +138,6 @@ Each slider has a **text box** on its right — type an exact value and press En
 
 ```bash
 conda activate maths_fun
-pip install PyQt5   # first time only
 python spiral_duo.py
 ```
 
@@ -160,6 +160,58 @@ Two fully independent spirals rendered simultaneously and alpha-blended together
 **Export PNG** — renders a clean 12 × 12 inch image at the chosen DPI to the current directory. Rendering runs off the main thread so the UI stays live.
 
 Default startup: Spiral 1 at golden angle (plasma), Spiral 2 at alternate golden angle (viridis), blend at 0.5 — two complementary sunflowers overlaid.
+
+---
+
+### Interactive spirograph — `spirograph.py`
+
+```bash
+conda activate maths_fun
+python spirograph.py
+```
+
+A pygame window with a dark canvas on the left and a control panel on the right. The curve is redrawn live as you adjust any parameter.
+
+**Gear formula**
+- **Hypotrochoid** — inner gear (radius r) rolling inside a fixed outer ring (radius R), with the pen at distance d from the inner gear's centre:
+  `x = (R−r)cos t + d·cos((R−r)/r · t)`, `y = (R−r)sin t − d·sin((R−r)/r · t)`
+- **Epitrochoid** — inner gear rolling *outside* the fixed gear:
+  `x = (R+r)cos t − d·cos((R+r)/r · t)`, `y = (R+r)sin t − d·sin((R+r)/r · t)`
+
+**Sliders**
+- **Outer ring radius R** — size of the fixed gear (40–300)
+- **Rolling gear radius r** — size of the moving gear (5–200)
+- **Pen offset d** — distance of the pen from the rolling gear's centre (0–300)
+- **Revolutions** — how many times the inner gear completes a full loop (1–40)
+- **Line width** — stroke thickness (1–6)
+- **Resolution (pts)** — number of segments computed (500–10,000)
+- **Anim speed (pts/frame)** — how many segments are drawn per frame in animate mode (1–300); drag left to watch the gear trace slowly
+
+**Colourmap** — the curve is coloured end-to-end through the selected matplotlib colormap: viridis, plasma, magma, inferno, cividis, twilight, cool, rainbow.
+
+**Mode** — toggle between Hypotrochoid and Epitrochoid.
+
+**Show Gears** — overlays the animated rolling gear and pen arm on the canvas.
+
+**Animate** — draws the curve incrementally frame by frame, looping continuously. Combine with Show Gears to watch the pen trace the pattern.
+
+**Presets**
+- **Classic** — R=160, r=40, d=80, 4 revolutions
+- **Star** — R=175, r=25, d=100, 7 revolutions
+- **Flower** — R=140, r=20, d=90, 3 revolutions (epitrochoid)
+- **Orbit** — R=160, r=80, d=40, 5 revolutions
+
+**Export PNG** — renders a fresh off-screen image at the chosen resolution (line width scaled proportionally) and saves it to the current directory. The filename encodes all current parameters and a timestamp.
+
+| Button | Resolution |
+|--------|-----------|
+| 1080p | 1920 × 1080 |
+| 1440p | 2560 × 1440 |
+| 4K | 3840 × 2160 |
+| Sq 2K | 2160 × 2160 |
+| Sq 4K | 4096 × 4096 |
+
+**Keyboard shortcuts**: `R` redraw · `C` clear · `A` toggle animate · `Esc` quit
 
 ---
 
