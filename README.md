@@ -1,6 +1,6 @@
 # maths_fun
 
-Some fun ways to look at numbers and shapes — interactive visualizations of prime number spirals, generalised spirals, and geometric spirographs.
+Some fun ways to look at numbers and shapes — interactive visualizations of prime number spirals, generalised spirals, geometric spirographs, Fourier epicycles, and Lissajous figures.
 
 ## Programs
 
@@ -11,6 +11,8 @@ Some fun ways to look at numbers and shapes — interactive visualizations of pr
 | `spiral_artist.py` | Pure spirograph explorer — gradient coloring, keyboard input, high-res PNG export |
 | `spiral_duo.py` | Dual-spiral PyQt5 viewer — two independent spirals with live alpha blend, parallel rendering |
 | `spirograph.py` | Interactive gear-based spirograph — hypotrochoid/epitrochoid, animated gear overlay, PNG export |
+| `fourier_explorer.py` | Fourier series visualizer — epicycle animation, amplitude spectrum, DFT complex-plane view |
+| `lissajous_explorer.py` | Lissajous figure explorer — double-pendulum physics, animated trace, damping, phase sweep, PNG export |
 | `prime_gallery_100.py` | Static three-panel figure showing integers 1–100 across all three spirals |
 
 ---
@@ -212,6 +214,108 @@ A pygame window with a dark canvas on the left and a control panel on the right.
 | Sq 4K | 4096 × 4096 |
 
 **Keyboard shortcuts**: `R` redraw · `C` clear · `A` toggle animate · `Esc` quit
+
+---
+
+### Fourier Explorer — `fourier_explorer.py`
+
+```bash
+conda activate maths_fun
+python fourier_explorer.py
+```
+
+A matplotlib window showing how any closed curve can be expressed as a sum of rotating circles — the Discrete Fourier Transform visualised as epicycles. Three panels update together:
+
+**Left — Epicycle reconstruction**
+The curve is traced by a chain of rotating circles. Each circle corresponds to one Fourier frequency component: its radius is the amplitude `|Cₖ|` and it rotates at `k` cycles per period. The faint outline is the target shape; the bright path is what the current set of harmonics draws.
+
+**Top right — Amplitude spectrum `|Cₖ|`**
+Bar chart of the DFT coefficient magnitudes, centred at frequency 0, showing ±80 frequency bins. Selected harmonics (included in the reconstruction) are highlighted in blue. An annotation shows how much of the total signal energy the selected terms capture.
+
+**Bottom right — DFT coefficients in the complex plane**
+Each Fourier coefficient `Cₖ` is plotted as a dot at `(Re Cₖ, Im Cₖ)`. Selected coefficients are bright; unselected are dim. Spokes to the origin show the phase relationship. This is the "Fourier space" view — amplitude is distance from origin, phase is angle.
+
+**Controls**
+- **Harmonics** — how many frequency components to include (1 … 100); terms are added in order of decreasing amplitude
+- **Speed** — animation rate (0.1 … 8×)
+- **Preset** — target shape: Heart, Square, Star, Triangle, Lissajous, Spirograph, Epitrochoid, Astroid
+- **Pause / Play** — freeze the animation
+- **Circles: ON/OFF** — show or hide the rotating-circle overlay
+- **Reset** — restart the trace from the beginning
+
+**Interesting things to try:**
+- Load *Spirograph* and reduce harmonics to 1 — it is exactly a 2-term Fourier series, so even 2 terms reconstruct it perfectly
+- Load *Square* and watch how adding more harmonics sharpens the corners (Gibbs phenomenon)
+- Load *Heart* — only 8 significant frequencies are needed for a perfect reconstruction
+- Toggle circles off and increase Speed to see the final drawn shape clearly
+
+---
+
+### Lissajous Explorer — `lissajous_explorer.py`
+
+```bash
+conda activate maths_fun
+python lissajous_explorer.py
+```
+
+A matplotlib window simulating the classic **double-pendulum Lissajous drawing machine** — two pendulums swinging at right angles, one controlling horizontal motion and one vertical, with a pen tracing the combined path.
+
+**Equations**
+
+```
+x(t) = Ax · exp(−γt/T) · sin(ωx·t + δ)
+y(t) = Ay · exp(−γt/T) · sin(ωy·t)
+```
+
+When the frequency ratio ωx:ωy is a ratio of small integers the curve closes on itself. Non-integer ratios produce slowly rotating, never-closing paths.
+
+**Pendulum Frequencies**
+- **ωx / ωy** — frequency of each pendulum; integer ratios (1:2, 2:3, 3:4 …) produce closed Lissajous curves
+
+**Phase & Amplitude**
+- **δ (°)** — phase offset between the two pendulums; rotates and reshapes the figure
+- **Ax / Ay** — swing amplitude of each pendulum
+
+**Pendulum Physics**
+- **Damping γ** — 0 = ideal frictionless pendulums (closed curve forever); increase to simulate friction — the trace spirals inward and eventually collapses to the origin
+- **Cycles** — how many periods of the longer pendulum to trace
+- **N pts** — number of trace points (more = smoother, slower to render)
+
+**Presets** — eight classic ratio configurations in a 4 × 2 grid:
+
+| Preset | ωx:ωy | Shape |
+|--------|--------|-------|
+| 1:1 | 1:1 | circle / ellipse |
+| 1:2 | 1:2 | figure-eight |
+| 1:3 | 1:3 | three-lobed curve |
+| 2:3 | 2:3 | three-lobed, denser |
+| 3:4 | 3:4 | four-lobed |
+| 3:5 | 3:5 | five-lobed |
+| 4:5 | 4:5 | five-lobed, denser |
+| 5:6 | 5:6 | six-lobed |
+
+**Visual style**
+- **Line w / Alpha** — stroke weight and transparency of the gradient trace
+- **Palette** — 8 gradient colormaps; the colour maps elapsed time from start (t=0) to end of trace
+
+**Animate Trace** — the pen starts at t=0 and draws the path forward in real time, with a white dot marking the current pen position. When the trace is complete it loops back to the start.
+- **Speed** — points drawn per frame (1–200); drag this slider while the animation is running to change its pace without interrupting it
+
+**Export PNG** — saves a clean image (no axes or controls) to the current directory. Five resolution options:
+
+| Button | Resolution |
+|--------|-----------|
+| 1080p | 1920 × 1080 |
+| 1440p | 2560 × 1440 |
+| 4K | 3840 × 2160 |
+| Sq 2K | 2160 × 2160 |
+| Sq 4K | 4096 × 4096 |
+
+**Interesting things to try:**
+- Set any preset, then drag **δ** slowly from 0° to 90° — watch the figure rotate from a horizontal line through an ellipse to the classic closed curve
+- Set **2:3** and enable **Animate Trace** at low speed — count the lobes as they form
+- Add a small **Damping** value (0.3–1.0) with many **Cycles** to see how a real pendulum machine would slowly decay inward
+- Try a near-integer ratio (e.g. ωx=3, ωy≈2 by setting ωy=2 and ωx=3 with a non-90° phase) and many cycles — the figure slowly precesses
 
 ---
 
