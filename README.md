@@ -1,6 +1,6 @@
 # maths_fun
 
-Some fun ways to look at numbers and shapes — interactive visualizations of prime number spirals, generalised spirals, geometric spirographs, Fourier epicycles, and Lissajous figures.
+Some fun ways to look at numbers and shapes — interactive visualizations of prime number spirals, generalised spirals, geometric spirographs, Fourier epicycles, Lissajous figures, and a chaotic double pendulum.
 
 ## Programs
 
@@ -13,6 +13,7 @@ Some fun ways to look at numbers and shapes — interactive visualizations of pr
 | `spirograph.py` | Interactive gear-based spirograph — hypotrochoid/epitrochoid, animated gear overlay, PNG export |
 | `fourier_explorer.py` | Fourier series visualizer — epicycle animation, amplitude spectrum, DFT complex-plane view |
 | `lissajous_explorer.py` | Lissajous figure explorer — double-pendulum physics, animated trace, damping, phase sweep, PNG export |
+| `double_pendulum.py` | Chaotic double pendulum — adjustable lengths, masses, gravity; fading trail; MP4 export |
 | `prime_gallery_100.py` | Static three-panel figure showing integers 1–100 across all three spirals |
 
 ---
@@ -26,7 +27,7 @@ conda create -n maths_fun python=3.11
 conda activate maths_fun
 ```
 
-### 2. Install dependencies
+### 2. Install pip dependencies
 
 ```bash
 pip install -r requirements.txt
@@ -36,6 +37,42 @@ Or manually:
 
 ```bash
 pip install numpy matplotlib pygame PyQt5
+```
+
+| Package | Used by |
+|---------|---------|
+| `numpy` | all programs |
+| `matplotlib` | all programs except `spirograph.py` |
+| `pygame` | `spirograph.py` |
+| `PyQt5` | `spiral_duo.py` |
+
+### 3. Install ffmpeg (for MP4 export)
+
+`double_pendulum.py` can export animations as MP4 files. This requires ffmpeg, which must be installed through conda rather than pip:
+
+```bash
+conda install -c conda-forge ffmpeg
+```
+
+To verify it is available:
+
+```bash
+python -c "from matplotlib.animation import FFMpegWriter; print(FFMpegWriter.isAvailable())"
+```
+
+### Running programs
+
+Activate the environment before running any program:
+
+```bash
+conda activate maths_fun
+python double_pendulum.py
+```
+
+Or without activating:
+
+```bash
+conda run -n maths_fun python double_pendulum.py
 ```
 
 ---
@@ -316,6 +353,72 @@ When the frequency ratio ωx:ωy is a ratio of small integers the curve closes o
 - Set **2:3** and enable **Animate Trace** at low speed — count the lobes as they form
 - Add a small **Damping** value (0.3–1.0) with many **Cycles** to see how a real pendulum machine would slowly decay inward
 - Try a near-integer ratio (e.g. ωx=3, ωy≈2 by setting ωy=2 and ωx=3 with a non-90° phase) and many cycles — the figure slowly precesses
+
+---
+
+### Double Pendulum — `double_pendulum.py`
+
+```bash
+conda activate maths_fun
+python double_pendulum.py
+```
+
+A real-time simulation of the double pendulum — two rigid arms connected end-to-end, governed by the full Lagrangian equations of motion. Small-angle configurations oscillate regularly; larger angles produce sensitive dependence on initial conditions and chaotic motion. The fading trail shows the recent path of the lower bob.
+
+**Equations of motion**
+
+```
+Δ  = θ1 − θ2
+D  = 2m1 + m2 − m2·cos(2Δ)
+α1 = [−g(2m1+m2)sin θ1 − m2·g·sin(θ1−2θ2) − 2·sin Δ·m2·(ω2²L2 + ω1²L1·cos Δ)] / L1D
+α2 = [2·sin Δ·(ω1²L1(m1+m2) + g(m1+m2)cos θ1 + ω2²L2·m2·cos Δ)] / L2D
+```
+
+Integrated with a fixed-step RK4 solver at 500 Hz.
+
+**Initial conditions**
+- **θ1 / θ2** — starting angle of each arm from vertical (−180° to 180°)
+- **ω1 / ω2** — starting angular velocity in rad/s
+
+**Pendulum**
+- **L1 / L2** — arm lengths in metres; bob size on screen scales with mass
+- **m1 / m2** — bob masses in kg
+
+**Environment**
+- **g** — gravitational acceleration (0 to 25 m/s²; set to 0 for weightless drift)
+- **Trail pts** — number of past positions shown in the fading trail (live, does not reset)
+- **Sim speed** — time multiplier (live); 0.1× for slow motion, 8× for fast-forward
+
+**Presets** — 4 × 2 grid:
+
+| Preset | Behaviour |
+|--------|-----------|
+| Small ✓ | θ1=20°, θ2=10° — small angle, near-harmonic, stable |
+| Sym ✓ | θ1=45°, θ2=−45° — symmetric mode, regular |
+| Chaotic 1 | θ1=120°, θ2=60° — classic chaotic motion |
+| Chaotic 2 | θ1=150°, θ2=30° — complex overlapping loops |
+| Butterfly | θ1=170°, θ2=10° — highly sensitive to initial conditions |
+| Near Top | θ1=179°, θ2=0° — upper arm nearly inverted, immediately chaotic |
+| Zero-G | g=0.5 m/s² — slow, dreamlike, weightless drift |
+| Unequal | L1=1.5, L2=0.5, m1=2.0, m2=0.3 — mismatched arm/mass ratio |
+
+**Pause / Reset** — freeze the simulation or restart from the current slider values.
+
+**Export MP4** — pre-computes the full trajectory starting from the *current live state* (let it run to something interesting, then export), renders a clean 8 × 8 inch video, and saves it to the current directory. Three duration options:
+
+| Button | Duration |
+|--------|---------|
+| 10 s | short clip |
+| 30 s | half-minute |
+| 60 s | one minute |
+
+Requires ffmpeg — see Setup above.
+
+**Interesting things to try:**
+- Apply **Small ✓**, watch the regular oscillation, then nudge **θ1** to 90° — chaos takes over immediately
+- Apply **Butterfly** and reset several times with tiny changes to **θ1** — the long-term paths diverge completely (sensitive dependence)
+- Set **g = 0** to watch the pendulum drift with no restoring force
+- Let any chaotic preset run for 30 seconds to fill the trail, then export the MP4
 
 ---
 
