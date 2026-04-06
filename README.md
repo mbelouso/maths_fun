@@ -1,6 +1,6 @@
 # maths_fun
 
-Some fun ways to look at numbers and shapes — interactive visualizations of prime number spirals, generalised spirals, geometric spirographs, Fourier epicycles, Lissajous figures, and a chaotic double pendulum.
+Some fun ways to look at numbers and shapes — interactive visualizations of prime number spirals, generalised spirals, geometric spirographs, Fourier epicycles, Lissajous figures, a chaotic double pendulum, and an interactive 3D three-body gravitational simulator.
 
 ## Programs
 
@@ -14,6 +14,8 @@ Some fun ways to look at numbers and shapes — interactive visualizations of pr
 | `fourier_explorer.py` | Fourier series visualizer — epicycle animation, amplitude spectrum, DFT complex-plane view |
 | `lissajous_explorer.py` | Lissajous figure explorer — double-pendulum physics, animated trace, damping, phase sweep, PNG export |
 | `double_pendulum.py` | Chaotic double pendulum — adjustable lengths, masses, gravity; fading trail; MP4 export |
+| `3_body_problem.py` | Interactive 3D three-body gravitational simulator — 7 presets, real-time collision handling, MP4 export |
+| `three_body_physics.py` | Physics engine for `3_body_problem.py` — ODE integration, collision detection, body colour/size helpers |
 | `prime_gallery_100.py` | Static three-panel figure showing integers 1–100 across all three spirals |
 
 ---
@@ -36,19 +38,21 @@ pip install -r requirements.txt
 Or manually:
 
 ```bash
-pip install numpy matplotlib pygame PyQt5
+pip install numpy matplotlib pygame PyQt5 scipy mpmath
 ```
 
 | Package | Used by |
 |---------|---------|
 | `numpy` | all programs |
 | `matplotlib` | all programs except `spirograph.py` |
+| `scipy` | `3_body_problem.py` (ODE integration) |
+| `mpmath` | `3_body_problem.py` (high-precision Figure-8 initial conditions) |
 | `pygame` | `spirograph.py` |
 | `PyQt5` | `spiral_duo.py` |
 
 ### 3. Install ffmpeg (for MP4 export)
 
-`double_pendulum.py` can export animations as MP4 files. This requires ffmpeg, which must be installed through conda rather than pip:
+`double_pendulum.py` and `3_body_problem.py` can export animations as MP4 files. This requires ffmpeg, which must be installed through conda rather than pip:
 
 ```bash
 conda install -c conda-forge ffmpeg
@@ -419,6 +423,95 @@ Requires ffmpeg — see Setup above.
 - Apply **Butterfly** and reset several times with tiny changes to **θ1** — the long-term paths diverge completely (sensitive dependence)
 - Set **g = 0** to watch the pendulum drift with no restoring force
 - Let any chaotic preset run for 30 seconds to fill the trail, then export the MP4
+
+---
+
+### Three-body problem — `3_body_problem.py`
+
+```bash
+conda activate maths_fun
+python 3_body_problem.py
+```
+
+A real-time 3D simulation of three mutually attracting bodies under Newtonian gravity. The window is split into two independent panels:
+
+- **Left — interactive 3D canvas**: rotate the view with the mouse; all axes are labelled in Astronomical Units (AU). A live clock in the top-left corner shows elapsed simulation time in years. The camera tracks the bodies automatically — zooming in when they are close, zooming out smoothly as they diverge.
+- **Right — native Qt control panel**: all controls are standard OS widgets (sliders, spinboxes, checkboxes, dropdowns) that operate independently of the matplotlib canvas so the UI never blocks during rendering or integration.
+
+The trajectory is computed by scipy's DOP853 integrator (8th-order Dormand-Prince) in a background thread; the canvas continues to animate and accept input while the solver runs.
+
+**Physics units**
+
+| Quantity | Unit |
+|----------|------|
+| Distance | AU (Astronomical Unit) |
+| Mass | M☉ (Solar mass) |
+| Time | sim-yr; 1 sim-yr = 1/(2π) year ≈ 58.1 days |
+| Gravity | G = 1 (natural N-body units) |
+
+At these units a circular orbit at 1 AU around 1 M☉ has period 2π sim-yr = 1 calendar year, consistent with Kepler's third law.
+
+**Colour and size by mass**
+
+| Mass range | Appearance | Classification |
+|------------|------------|----------------|
+| < 0.08 M☉ | Deep orange | Gas giant |
+| 0.08 – 0.3 M☉ | Orange-red | Brown/red dwarf |
+| 0.3 – 1.0 M☉ | Red-orange | M-dwarf |
+| 1.0 – 1.4 M☉ | Yellow | G-type (Sun-like) |
+| 1.4 – 2.0 M☉ | Yellow-white | F-type |
+| 2.0 – 8.0 M☉ | White | A-type |
+| 8.0 – 20 M☉ | Blue-white | B-type |
+| > 20 M☉ | Bright blue | O-type |
+
+Marker area scales as mass^(1/3), clamped to a visible range. Each body is drawn with three scatter layers (core, inner glow, outer halo) and six fading trail segments.
+
+**Presets** — colour-coded by stability (green = stable, amber = semi-stable, red = chaotic):
+
+| Preset | Notes |
+|--------|-------|
+| Figure-8 | Three equal masses chasing each other on a figure-eight; initial conditions computed with mpmath at 50-digit precision |
+| Lagrange △ | Three equal masses at the vertices of an equilateral triangle — the Lagrange L4/L5 solution |
+| Hierarchical | A tight binary with a distant third body — semi-stable until perturbation builds up |
+| Sun-Jupiter-Saturn | Realistic mass ratios from the Solar System; long-term quasi-periodic |
+| Pythagorean | Masses 3, 4, 5 starting in a right-triangle arrangement — strongly chaotic with ejection |
+| Fig-8 Perturbed | Figure-8 initial conditions with a small velocity kick — slowly breaks apart |
+| Random Chaotic | Randomised masses and positions; behaviour varies per run |
+
+**Bodies**
+- **Mass 1 / 2 / 3** — override each body's mass in M☉; the body's colour and glow update live. Applied at the next **▶ Integrate**.
+
+**Configuration**
+- **Separation Scale** — multiplies all initial body positions by this factor; velocities are adjusted as 1/√scale to keep the system bound (Kepler scaling)
+- **Tilt °** — rotates the orbital plane around the x-axis for a better 3D viewing angle
+- **Collision Radius (AU)** — bodies merge if their separation falls below this distance
+- **Collision Detection** (checkbox) — when ticked, scipy event detection stops integration at each collision, merges bodies conserving momentum, and continues. When unticked, bodies pass through each other
+
+**Integration**
+- **Duration** — total simulated time in sim-yr
+- **ODE Method** — DOP853 (8th-order, more accurate) or RK45 (faster)
+- **Tolerance 1e-N** — relative tolerance for the ODE solver (higher = more accurate, slower)
+- **▶ Integrate** — re-runs the simulation in a background thread; "Computing…" is shown in the canvas while it runs
+
+**Visual**
+- **Trail %** — fraction of the trajectory shown as a fading trail behind each body
+- **Speed** — animation playback rate (frames advance per timer tick)
+- **Show Force Vectors** (checkbox) — draws a colour-matched arrow on each body showing the net gravitational force it is experiencing at that instant. Arrow lengths are scaled so the largest force vector is 25% of the current view radius, keeping them visible at any zoom level
+
+**Export MP4** — renders up to 1200 frames at 1920 × 1080 @ 120 DPI, 30 fps, matching the current view angle and axis limits. Runs in a background thread; progress shown in the canvas. Requires ffmpeg — see Setup above.
+
+**Live camera**
+The 3D view updates every frame using an asymmetric exponential moving average:
+- **Zoom out** (bodies diverging): fast response (α = 0.08) so bodies never leave the screen
+- **Zoom in** (bodies re-approaching): slow ease-in (α = 0.02) to avoid jarring snaps
+- **Outlier rejection**: if one body has escaped and is 3× farther than the next-farthest, the camera focuses on the remaining cluster; the escaped body slides out of frame without dominating the scale
+
+**Interesting things to try:**
+- Load **Figure-8**, watch the perfect choreography, then switch to **Fig-8 Perturbed** to see how quickly it breaks down
+- Load **Pythagorean** with **Collision Detection** on — bodies at masses 3, 4, 5 merge in sequence until one massive object remains
+- Load **Lagrange △**, increase **Separation Scale** to 2–3, and watch numerical drift slowly destabilise the equilateral arrangement
+- Load any preset, tilt the orbit 45–60°, rotate the 3D view with the mouse to find the best angle, then export an MP4
+- Set **Sun-Jupiter-Saturn** and run for Duration = 500 sim-yr to see the long-term quasi-periodic structure
 
 ---
 
