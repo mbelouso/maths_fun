@@ -607,7 +607,7 @@ class PendulumChaosMap(QMainWindow):
         r_lay.setSpacing(4)
         r_lay.addWidget(QLabel("N ×  N :"))
         self._sb_grid = QSpinBox()
-        self._sb_grid.setRange(10, 500)
+        self._sb_grid.setRange(10, 1000)
         self._sb_grid.setValue(100)
         self._sb_grid.setFixedWidth(76)
         r_lay.addWidget(self._sb_grid)
