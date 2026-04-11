@@ -1,6 +1,6 @@
 # maths_fun
 
-Some fun ways to look at numbers and shapes — interactive visualizations of prime number spirals, generalised spirals, geometric spirographs, Fourier epicycles, Lissajous figures, a chaotic double pendulum, and an interactive 3D three-body gravitational simulator.
+Some fun ways to look at numbers and shapes — interactive visualizations of prime number spirals, generalised spirals, geometric spirographs, Fourier epicycles, Lissajous figures, a chaotic double pendulum with a chaos map explorer, and an interactive 3D three-body gravitational simulator.
 
 ## Programs
 
@@ -14,6 +14,7 @@ Some fun ways to look at numbers and shapes — interactive visualizations of pr
 | `fourier_explorer.py` | Fourier series visualizer — epicycle animation, amplitude spectrum, DFT complex-plane view |
 | `lissajous_explorer.py` | Lissajous figure explorer — double-pendulum physics, animated trace, damping, phase sweep, PNG export |
 | `double_pendulum.py` | Chaotic double pendulum — adjustable lengths, masses, gravity; fading trail; MP4 export |
+| `pendulum_chaos_map.py` | Double pendulum chaos map — 2D heatmap of stability vs chaos across initial angle space; click-to-preview; PNG/pkl export |
 | `3_body_problem.py` | Interactive 3D three-body gravitational simulator — 7 presets, real-time collision handling, MP4 export |
 | `three_body_physics.py` | Physics engine for `3_body_problem.py` — ODE integration, collision detection, body colour/size helpers |
 | `prime_gallery_100.py` | Static three-panel figure showing integers 1–100 across all three spirals |
@@ -48,7 +49,7 @@ pip install numpy matplotlib pygame PyQt5 scipy mpmath
 | `scipy` | `3_body_problem.py` (ODE integration) |
 | `mpmath` | `3_body_problem.py` (high-precision Figure-8 initial conditions) |
 | `pygame` | `spirograph.py` |
-| `PyQt5` | `spiral_duo.py` |
+| `PyQt5` | `spiral_duo.py`, `3_body_problem.py`, `pendulum_chaos_map.py` |
 
 ### 3. Install ffmpeg (for MP4 export)
 
@@ -423,6 +424,80 @@ Requires ffmpeg — see Setup above.
 - Apply **Butterfly** and reset several times with tiny changes to **θ1** — the long-term paths diverge completely (sensitive dependence)
 - Set **g = 0** to watch the pendulum drift with no restoring force
 - Let any chaotic preset run for 30 seconds to fill the trail, then export the MP4
+
+---
+
+### Double Pendulum Chaos Map — `pendulum_chaos_map.py`
+
+```bash
+conda activate maths_fun
+python pendulum_chaos_map.py
+```
+
+A PyQt5 application that maps out the stability landscape of the double pendulum across all possible starting angles. The window shows a 2D heatmap where the x-axis is the initial angle θ1 (first arm) and the y-axis is θ2 (second arm). Every pendulum is released from rest — the colour of each cell encodes how chaotically it behaves.
+
+The entire grid of pendulums (up to 500 × 500 = 250,000 simultaneous simulations) is integrated at once using a vectorised numpy RK4 solver. Computation runs in a background thread so the UI stays responsive.
+
+**Chaos metric — flip count**
+
+Each cell counts how many times the second bob's angle θ2 crosses a multiple of π during the simulation — i.e. how many half-rotations it completes. A pendulum that swings gently back and forth scores 0; one that whips chaotically around the pivot accumulates many flips. This is the standard metric used in published double pendulum chaos maps and produces the characteristic fractal boundary between stable and chaotic regions.
+
+**Angular Range**
+- **θ1 min / max** — horizontal extent of the map (default −180° to 180°)
+- **θ2 min / max** — vertical extent of the map (default −180° to 180°)
+
+Narrow the range and increase resolution to zoom into interesting regions of the fractal boundary.
+
+**Grid Resolution**
+- **Coarse 50** / **Medium 100** / **Fine 200** — preset buttons for common grid sizes
+- **N × N** — custom grid size (10 to 500). Higher values show finer fractal structure but take longer to compute
+
+Estimated compute times (t = 20 s, default physics):
+
+| Grid | Pendulums | Time |
+|------|-----------|------|
+| 50 × 50 | 2,500 | ~1–3 s |
+| 100 × 100 | 10,000 | ~30 s |
+| 200 × 200 | 40,000 | ~2 min |
+
+**Simulation**
+- **Duration (s)** — how long each pendulum is simulated (5–60 s, default 20 s). Longer durations allow more flips to accumulate, revealing finer detail in the chaotic regions
+
+**Physics**
+- **m1 / m2** — bob masses in kg (0.1 to 5.0)
+- **g** — gravitational acceleration (0.1 to 25.0 m/s²)
+- Arm lengths are fixed at L1 = L2 = 1.0 m (equal arms, as required for the standard chaos map)
+
+**Display**
+- **Colormap** — choose from inferno, viridis, plasma, magma, hot, turbo, twilight. Changing the colormap is instant — no recomputation needed
+- **Log scale** — applies `log(1 + flips)` to the data, compressing the dynamic range and revealing fine structure at the boundary between stable and chaotic regions that is invisible at linear scale
+
+**Actions**
+- **▶ Compute** — starts the simulation in a background thread. A progress bar shows completion. Results are auto-saved to a `.pkl` file in the current directory
+- **Export PNG** — saves a high-resolution (300 DPI, 12 × 10 inch) image with the current colormap and axis labels. Filename encodes grid size, duration, colormap, and timestamp
+- **Load .pkl** — opens a file dialog to reload any previously saved result. The heatmap, axis ranges, and physics parameters are restored instantly
+
+**Click to preview**
+
+Left-click anywhere on the heatmap to open a **live animated pendulum** in a new window at those exact (θ1, θ2) initial conditions. The preview window shows:
+- Animated rods, bobs (blue/orange), and pivot
+- Fading trail (hot colormap, 600 points) tracing the lower bob's path
+- Live energy readout (t, KE, PE, total E)
+- Pause / Resume and Reset buttons
+
+Multiple preview windows can be open simultaneously — each runs independently. This lets you visually compare a stable configuration with a chaotic one side by side.
+
+**Hover tooltip**
+
+Move the mouse over the heatmap to see the exact θ1, θ2, and flip count at the cursor position in the status label.
+
+**Interesting things to try:**
+- Start with **Coarse 50** for a quick overview, then switch to **Fine 200** to see the fractal boundary in detail
+- Toggle **Log scale** on — the boundary between stable and chaotic regions has remarkably intricate fractal structure that only becomes visible with logarithmic scaling
+- Click a point in the dark (stable) region near the centre, then click a point in the bright (chaotic) region near the edges — watch the dramatically different pendulum behaviour in the preview windows
+- Narrow the angular range to a small region around the stable/chaotic boundary (e.g. θ1: 80° to 130°, θ2: 20° to 70°) and compute at Fine resolution — the fractal self-similarity becomes apparent
+- Reduce **g** to 1–2 m/s² and recompute — the chaotic region shrinks as gravity weakens
+- Set **m1 = 5.0, m2 = 0.1** — the mass asymmetry changes the shape of the stable regions
 
 ---
 
