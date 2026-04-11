@@ -21,10 +21,12 @@ Author: Matthew Belousoff, Claude 2026
 """
 
 import sys
+import os
 import time
 import threading
 import datetime
 import pickle
+import multiprocessing
 
 import numpy as np
 import matplotlib
@@ -116,9 +118,49 @@ def _make_derivs(L, m1, m2, g):
     return derivs
 
 
+def _compute_chunk(args):
+    """Integrate a chunk of pendulums.  Top-level for pickle/multiprocessing.
+
+    args: (states_chunk, L, m1, m2, g, t_end, dt, chunk_id)
+    Returns: (chunk_id, flips_1d)
+    """
+    states, L, m1, m2, g, t_end, dt, chunk_id = args
+    N = states.shape[0]
+    if N == 0:
+        return (chunk_id, np.zeros(0, dtype=np.int32))
+
+    flips = np.zeros(N, dtype=np.int32)
+    prev_bin = np.floor(states[:, 2] / np.pi).astype(np.int64)
+
+    k1  = np.empty_like(states)
+    k2  = np.empty_like(states)
+    k3  = np.empty_like(states)
+    k4  = np.empty_like(states)
+    tmp = np.empty_like(states)
+
+    derivs = _make_derivs(L, m1, m2, g)
+    dt2 = 0.5 * dt
+    dt6 = dt / 6.0
+
+    n_steps = int(t_end / dt)
+    for step in range(n_steps):
+        derivs(states, k1)
+        np.add(states, dt2 * k1, out=tmp);  derivs(tmp, k2)
+        np.add(states, dt2 * k2, out=tmp);  derivs(tmp, k3)
+        np.add(states, dt  * k3, out=tmp);  derivs(tmp, k4)
+        states += dt6 * (k1 + 2*k2 + 2*k3 + k4)
+
+        cur_bin = np.floor(states[:, 2] / np.pi).astype(np.int64)
+        flips += (cur_bin != prev_bin).view(np.int8).astype(np.int32)
+        prev_bin = cur_bin
+
+    return (chunk_id, flips)
+
+
 def compute_chaos_grid(th1_range, th2_range, n1, n2,
                        L=1.0, m1=1.0, m2=1.0, g=9.81,
-                       t_end=20.0, dt=0.002, progress_cb=None):
+                       t_end=20.0, dt=0.002, n_workers=1,
+                       progress_cb=None):
     """Compute flip-count chaos metric for an n2×n1 grid of double pendulums.
 
     Parameters
@@ -126,6 +168,7 @@ def compute_chaos_grid(th1_range, th2_range, n1, n2,
     th1_range : (float, float)  θ1 min/max in **radians**
     th2_range : (float, float)  θ2 min/max in **radians**
     n1, n2    : grid dims (columns, rows)
+    n_workers : int  number of parallel processes (1 = single-process)
     progress_cb : callable(int)  called with percentage 0-100
 
     Returns
@@ -137,47 +180,76 @@ def compute_chaos_grid(th1_range, th2_range, n1, n2,
     TH1, TH2 = np.meshgrid(th1_vals, th2_vals)
 
     N = n1 * n2
-    states = np.zeros((N, 4), dtype=np.float64)
-    states[:, 0] = TH1.ravel()
-    states[:, 2] = TH2.ravel()
+    states_all = np.zeros((N, 4), dtype=np.float64)
+    states_all[:, 0] = TH1.ravel()
+    states_all[:, 2] = TH2.ravel()
 
-    flips = np.zeros(N, dtype=np.int32)
-    prev_bin = np.floor(states[:, 2] / np.pi).astype(np.int64)
+    n_workers = max(1, min(n_workers, N))
 
-    # pre-allocate RK4 temporaries
-    k1 = np.empty_like(states)
-    k2 = np.empty_like(states)
-    k3 = np.empty_like(states)
-    k4 = np.empty_like(states)
-    tmp = np.empty_like(states)
+    # ── Single-process fast path (no IPC overhead) ───────────────────────
+    if n_workers <= 1:
+        flips = np.zeros(N, dtype=np.int32)
+        prev_bin = np.floor(states_all[:, 2] / np.pi).astype(np.int64)
+        k1  = np.empty_like(states_all)
+        k2  = np.empty_like(states_all)
+        k3  = np.empty_like(states_all)
+        k4  = np.empty_like(states_all)
+        tmp = np.empty_like(states_all)
+        derivs = _make_derivs(L, m1, m2, g)
+        dt2 = 0.5 * dt; dt6 = dt / 6.0
+        n_steps = int(t_end / dt)
+        report_every = max(1, n_steps // 100)
+        for step in range(n_steps):
+            derivs(states_all, k1)
+            np.add(states_all, dt2 * k1, out=tmp);  derivs(tmp, k2)
+            np.add(states_all, dt2 * k2, out=tmp);  derivs(tmp, k3)
+            np.add(states_all, dt  * k3, out=tmp);  derivs(tmp, k4)
+            states_all += dt6 * (k1 + 2*k2 + 2*k3 + k4)
+            cur_bin = np.floor(states_all[:, 2] / np.pi).astype(np.int64)
+            flips += (cur_bin != prev_bin).view(np.int8).astype(np.int32)
+            prev_bin = cur_bin
+            if progress_cb and step % report_every == 0:
+                progress_cb(int(100 * step / n_steps))
+        if progress_cb:
+            progress_cb(100)
+        return flips.reshape(n2, n1)
 
-    derivs = _make_derivs(L, m1, m2, g)
-    dt2 = 0.5 * dt
-    dt6 = dt / 6.0
-
-    n_steps = int(t_end / dt)
-    report_every = max(1, n_steps // 100)
-
-    for step in range(n_steps):
-        # RK4 with pre-allocated buffers
-        derivs(states, k1)
-        np.add(states, dt2 * k1, out=tmp);  derivs(tmp, k2)
-        np.add(states, dt2 * k2, out=tmp);  derivs(tmp, k3)
-        np.add(states, dt  * k3, out=tmp);  derivs(tmp, k4)
-        states += dt6 * (k1 + 2*k2 + 2*k3 + k4)
-
-        # flip detection
-        cur_bin = np.floor(states[:, 2] / np.pi).astype(np.int64)
-        flips += (cur_bin != prev_bin).view(np.int8).astype(np.int32)
-        prev_bin = cur_bin
-
-        if progress_cb and step % report_every == 0:
-            progress_cb(int(100 * step / n_steps))
+    # ── Multi-process path ───────────────────────────────────────────────
+    # Split rows across workers so each gets contiguous memory
+    row_splits = np.array_split(np.arange(n2), n_workers)
+    chunks = []
+    for cid, rows in enumerate(row_splits):
+        if len(rows) == 0:
+            continue
+        r0, r1 = rows[0], rows[-1] + 1
+        idx0 = r0 * n1
+        idx1 = r1 * n1
+        chunk_states = states_all[idx0:idx1].copy()
+        chunks.append((chunk_states, L, m1, m2, g, t_end, dt, cid))
 
     if progress_cb:
-        progress_cb(100)
+        progress_cb(0)
 
-    return flips.reshape(n2, n1)
+    from concurrent.futures import ProcessPoolExecutor, as_completed
+
+    flips_all = np.zeros(N, dtype=np.int32)
+    done_count = 0
+
+    with ProcessPoolExecutor(max_workers=n_workers) as pool:
+        futures = {pool.submit(_compute_chunk, c): c[7] for c in chunks}
+        for fut in as_completed(futures):
+            cid = futures[fut]
+            _, chunk_flips = fut.result()
+            # place back into the correct rows
+            rows = row_splits[cid]
+            r0 = rows[0] * n1
+            r1 = (rows[-1] + 1) * n1
+            flips_all[r0:r1] = chunk_flips
+            done_count += 1
+            if progress_cb:
+                progress_cb(int(100 * done_count / len(chunks)))
+
+    return flips_all.reshape(n2, n1)
 
 
 # ═══════════════════════════════════════════════════════════════════════════════
@@ -620,6 +692,23 @@ class PendulumChaosMap(QMainWindow):
         g_lay = QVBoxLayout(grp)
         self.sl_t_end = _ParamSlider("Duration (s)", 5, 60, 20, 1)
         g_lay.addWidget(self.sl_t_end)
+
+        row = QWidget()
+        r_lay = QHBoxLayout(row)
+        r_lay.setContentsMargins(0, 0, 0, 0)
+        r_lay.setSpacing(4)
+        r_lay.addWidget(QLabel("Workers:"))
+        self._sb_workers = QSpinBox()
+        n_cpus = os.cpu_count() or 4
+        self._sb_workers.setRange(1, n_cpus)
+        self._sb_workers.setValue(max(1, n_cpus - 1))
+        self._sb_workers.setFixedWidth(56)
+        r_lay.addWidget(self._sb_workers)
+        cpu_lbl = QLabel(f"  / {n_cpus} cores")
+        cpu_lbl.setStyleSheet("color:#888; font-size:8pt;")
+        r_lay.addWidget(cpu_lbl)
+        r_lay.addStretch()
+        g_lay.addWidget(row)
         lay.addWidget(grp)
 
         # ── Physics ──────────────────────────────────────────────────────
@@ -727,6 +816,7 @@ class PendulumChaosMap(QMainWindow):
         m1      = self.sl_m1.value()
         m2      = self.sl_m2.value()
         g       = self.sl_g.value()
+        n_workers = self._sb_workers.value()
 
         # store for display axes (degrees)
         self._th1_min = self.sl_th1_min.value()
@@ -751,7 +841,7 @@ class PendulumChaosMap(QMainWindow):
                 grid = compute_chaos_grid(
                     (th1_min, th1_max), (th2_min, th2_max), n_grid, n_grid,
                     L=1.0, m1=m1, m2=m2, g=g, t_end=t_end, dt=0.002,
-                    progress_cb=pcb,
+                    n_workers=n_workers, progress_cb=pcb,
                 )
                 if gen == self._generation:
                     bridge.finished.emit(grid)
@@ -779,6 +869,7 @@ class PendulumChaosMap(QMainWindow):
         self._lbl_status.setText(
             f"{self._n_grid}×{self._n_grid} grid  |  "
             f"t = {self._t_end_v:.0f}s  |  "
+            f"{self._sb_workers.value()} workers  |  "
             f"{elapsed:.1f}s elapsed\n"
             f"Flips: min {mn},  max {mx}")
 
