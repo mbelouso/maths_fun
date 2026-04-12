@@ -122,15 +122,23 @@ def _compute_chunk(args):
     """Integrate a chunk of pendulums.  Top-level for pickle/multiprocessing.
 
     args: (states_chunk, L, m1, m2, g, t_end, dt, chunk_id)
-    Returns: (chunk_id, flips_1d)
+    Returns: (chunk_id, flips_th2, flips_th1, max_w2)
     """
     states, L, m1, m2, g, t_end, dt, chunk_id = args
     N = states.shape[0]
     if N == 0:
-        return (chunk_id, np.zeros(0, dtype=np.int32))
+        return (chunk_id,
+                np.zeros(0, dtype=np.int32),
+                np.zeros(0, dtype=np.int32),
+                np.zeros(0, dtype=np.float64))
 
-    flips = np.zeros(N, dtype=np.int32)
-    prev_bin = np.floor(states[:, 2] / np.pi).astype(np.int64)
+    flips_th2 = np.zeros(N, dtype=np.int32)
+    flips_th1 = np.zeros(N, dtype=np.int32)
+    max_w2    = np.zeros(N, dtype=np.float64)
+
+    # Wrap to [-π, π] for flip detection (crossing ±π = going over the top)
+    prev_w1 = ((states[:, 0] + np.pi) % (2*np.pi)) - np.pi
+    prev_w2 = ((states[:, 2] + np.pi) % (2*np.pi)) - np.pi
 
     k1  = np.empty_like(states)
     k2  = np.empty_like(states)
@@ -150,30 +158,32 @@ def _compute_chunk(args):
         np.add(states, dt  * k3, out=tmp);  derivs(tmp, k4)
         states += dt6 * (k1 + 2*k2 + 2*k3 + k4)
 
-        cur_bin = np.floor(states[:, 2] / np.pi).astype(np.int64)
-        flips += (cur_bin != prev_bin).view(np.int8).astype(np.int32)
-        prev_bin = cur_bin
+        # Flip detection: wrapped angle jump > π means ±π crossing
+        cur_w1 = ((states[:, 0] + np.pi) % (2*np.pi)) - np.pi
+        cur_w2 = ((states[:, 2] + np.pi) % (2*np.pi)) - np.pi
+        flips_th1 += (np.abs(cur_w1 - prev_w1) > np.pi).astype(np.int32)
+        flips_th2 += (np.abs(cur_w2 - prev_w2) > np.pi).astype(np.int32)
+        prev_w1 = cur_w1
+        prev_w2 = cur_w2
 
-    return (chunk_id, flips)
+        # Track peak angular velocity of outer bob
+        np.maximum(max_w2, np.abs(states[:, 3]), out=max_w2)
+
+    return (chunk_id, flips_th2, flips_th1, max_w2)
 
 
 def compute_chaos_grid(th1_range, th2_range, n1, n2,
                        L=1.0, m1=1.0, m2=1.0, g=9.81,
                        t_end=20.0, dt=0.002, n_workers=1,
                        progress_cb=None):
-    """Compute flip-count chaos metric for an n2×n1 grid of double pendulums.
-
-    Parameters
-    ----------
-    th1_range : (float, float)  θ1 min/max in **radians**
-    th2_range : (float, float)  θ2 min/max in **radians**
-    n1, n2    : grid dims (columns, rows)
-    n_workers : int  number of parallel processes (1 = single-process)
-    progress_cb : callable(int)  called with percentage 0-100
+    """Compute chaos metrics for an n2×n1 grid of double pendulums.
 
     Returns
     -------
-    flips : (n2, n1) int32  —  number of θ2 half-rotations per cell
+    dict with keys:
+        "flips_2"    : (n2, n1) int32  — θ₂ over-the-top flips
+        "flips_both" : (n2, n1) int32  — θ₁ + θ₂ flips combined
+        "max_w2"     : (n2, n1) float64 — peak |ω₂| during simulation
     """
     th1_vals = np.linspace(th1_range[0], th1_range[1], n1)
     th2_vals = np.linspace(th2_range[0], th2_range[1], n2)
@@ -188,8 +198,13 @@ def compute_chaos_grid(th1_range, th2_range, n1, n2,
 
     # ── Single-process fast path (no IPC overhead) ───────────────────────
     if n_workers <= 1:
-        flips = np.zeros(N, dtype=np.int32)
-        prev_bin = np.floor(states_all[:, 2] / np.pi).astype(np.int64)
+        flips_th2 = np.zeros(N, dtype=np.int32)
+        flips_th1 = np.zeros(N, dtype=np.int32)
+        max_w2    = np.zeros(N, dtype=np.float64)
+
+        prev_w1 = ((states_all[:, 0] + np.pi) % (2*np.pi)) - np.pi
+        prev_w2 = ((states_all[:, 2] + np.pi) % (2*np.pi)) - np.pi
+
         k1  = np.empty_like(states_all)
         k2  = np.empty_like(states_all)
         k3  = np.empty_like(states_all)
@@ -205,14 +220,25 @@ def compute_chaos_grid(th1_range, th2_range, n1, n2,
             np.add(states_all, dt2 * k2, out=tmp);  derivs(tmp, k3)
             np.add(states_all, dt  * k3, out=tmp);  derivs(tmp, k4)
             states_all += dt6 * (k1 + 2*k2 + 2*k3 + k4)
-            cur_bin = np.floor(states_all[:, 2] / np.pi).astype(np.int64)
-            flips += (cur_bin != prev_bin).view(np.int8).astype(np.int32)
-            prev_bin = cur_bin
+
+            cur_w1 = ((states_all[:, 0] + np.pi) % (2*np.pi)) - np.pi
+            cur_w2 = ((states_all[:, 2] + np.pi) % (2*np.pi)) - np.pi
+            flips_th1 += (np.abs(cur_w1 - prev_w1) > np.pi).astype(np.int32)
+            flips_th2 += (np.abs(cur_w2 - prev_w2) > np.pi).astype(np.int32)
+            prev_w1 = cur_w1
+            prev_w2 = cur_w2
+
+            np.maximum(max_w2, np.abs(states_all[:, 3]), out=max_w2)
+
             if progress_cb and step % report_every == 0:
                 progress_cb(int(100 * step / n_steps))
         if progress_cb:
             progress_cb(100)
-        return flips.reshape(n2, n1)
+        return {
+            "flips_2":    flips_th2.reshape(n2, n1),
+            "flips_both": (flips_th1 + flips_th2).reshape(n2, n1),
+            "max_w2":     max_w2.reshape(n2, n1),
+        }
 
     # ── Multi-process path ───────────────────────────────────────────────
     # Split rows across workers so each gets contiguous memory
@@ -232,24 +258,32 @@ def compute_chaos_grid(th1_range, th2_range, n1, n2,
 
     from concurrent.futures import ProcessPoolExecutor, as_completed
 
-    flips_all = np.zeros(N, dtype=np.int32)
+    flips_th2_all = np.zeros(N, dtype=np.int32)
+    flips_th1_all = np.zeros(N, dtype=np.int32)
+    max_w2_all    = np.zeros(N, dtype=np.float64)
     done_count = 0
 
     with ProcessPoolExecutor(max_workers=n_workers) as pool:
         futures = {pool.submit(_compute_chunk, c): c[7] for c in chunks}
         for fut in as_completed(futures):
             cid = futures[fut]
-            _, chunk_flips = fut.result()
+            _, chunk_f2, chunk_f1, chunk_mw2 = fut.result()
             # place back into the correct rows
             rows = row_splits[cid]
             r0 = rows[0] * n1
             r1 = (rows[-1] + 1) * n1
-            flips_all[r0:r1] = chunk_flips
+            flips_th2_all[r0:r1] = chunk_f2
+            flips_th1_all[r0:r1] = chunk_f1
+            max_w2_all[r0:r1]    = chunk_mw2
             done_count += 1
             if progress_cb:
                 progress_cb(int(100 * done_count / len(chunks)))
 
-    return flips_all.reshape(n2, n1)
+    return {
+        "flips_2":    flips_th2_all.reshape(n2, n1),
+        "flips_both": (flips_th1_all + flips_th2_all).reshape(n2, n1),
+        "max_w2":     max_w2_all.reshape(n2, n1),
+    }
 
 
 # ═══════════════════════════════════════════════════════════════════════════════
@@ -577,7 +611,8 @@ class PendulumChaosMap(QMainWindow):
 
         self._computing  = False
         self._generation = 0
-        self._grid       = None        # (n2, n1) flip counts
+        self._grids      = None        # dict of metric_name → (n2, n1) array
+        self._metric     = "Flips (θ₂)"
         self._cmap_name  = "inferno"
         self._log_scale  = False
         self._t0         = 0.0         # compute start time
@@ -644,6 +679,20 @@ class PendulumChaosMap(QMainWindow):
         title.setAlignment(Qt.AlignCenter)
         title.setStyleSheet(f"color:{GOLD}; font-size:11pt; font-weight:bold;")
         lay.addWidget(title)
+
+        # ── Metric selector (top-level for visibility) ───────────────────
+        row = QWidget()
+        r_lay = QHBoxLayout(row)
+        r_lay.setContentsMargins(0, 0, 0, 0)
+        r_lay.setSpacing(4)
+        lbl = QLabel("Metric:")
+        lbl.setStyleSheet("font-weight:bold;")
+        r_lay.addWidget(lbl)
+        self._cb_metric = QComboBox()
+        self._cb_metric.addItems(["Flips (θ₂)", "Flips (θ₁+θ₂)", "Peak |ω₂|"])
+        self._cb_metric.currentTextChanged.connect(self._on_metric_change)
+        r_lay.addWidget(self._cb_metric)
+        lay.addWidget(row)
 
         # ── Angular Range ────────────────────────────────────────────────
         grp = QGroupBox("Angular Range")
@@ -853,34 +902,46 @@ class PendulumChaosMap(QMainWindow):
     def _on_progress(self, pct):
         self._progress.setValue(pct)
 
-    def _on_compute_done(self, grid):
+    def _on_compute_done(self, result):
         elapsed = time.time() - self._t0
         self._computing = False
         self._btn_compute.setEnabled(True)
         self._btn_compute.setText("▶  Compute")
         self._progress.setValue(100)
-        self._grid = grid
 
-        mn, mx = int(grid.min()), int(grid.max())
+        # result is a dict: {"flips_2": ..., "flips_both": ..., "max_w2": ...}
+        self._grids = {
+            "Flips (θ₂)":    result["flips_2"],
+            "Flips (θ₁+θ₂)": result["flips_both"],
+            "Peak |ω₂|":     result["max_w2"],
+        }
+
+        grid = self._grids[self._metric]
+        mn, mx = grid.min(), grid.max()
 
         # Auto-save .pkl
         self._save_pkl()
+
+        if self._metric == "Peak |ω₂|":
+            stats = f"Peak |ω₂|: min {mn:.1f},  max {mx:.1f} rad/s"
+        else:
+            stats = f"Flips: min {int(mn)},  max {int(mx)}"
 
         self._lbl_status.setText(
             f"{self._n_grid}×{self._n_grid} grid  |  "
             f"t = {self._t_end_v:.0f}s  |  "
             f"{self._sb_workers.value()} workers  |  "
-            f"{elapsed:.1f}s elapsed\n"
-            f"Flips: min {mn},  max {mx}")
+            f"{elapsed:.1f}s elapsed\n{stats}"
+        )
 
         self._update_display()
 
     def _save_pkl(self):
-        """Save current grid + metadata to .pkl for instant reload."""
-        if self._grid is None:
+        """Save current grids + metadata to .pkl for instant reload."""
+        if self._grids is None:
             return
         data = dict(
-            grid=self._grid,
+            grids=self._grids,
             th1_min=self._th1_min, th1_max=self._th1_max,
             th2_min=self._th2_min, th2_max=self._th2_max,
             n_grid=self._n_grid, t_end=self._t_end_v,
@@ -903,7 +964,18 @@ class PendulumChaosMap(QMainWindow):
         try:
             with open(fname, "rb") as f:
                 data = pickle.load(f)
-            self._grid     = data["grid"]
+
+            # Support both old (single "grid") and new ("grids" dict) formats
+            if "grids" in data:
+                self._grids = data["grids"]
+            elif "grid" in data:
+                old_grid = data["grid"]
+                self._grids = {
+                    "Flips (θ₂)":    old_grid,
+                    "Flips (θ₁+θ₂)": old_grid,
+                    "Peak |ω₂|":     np.zeros_like(old_grid, dtype=np.float64),
+                }
+
             self._th1_min  = data["th1_min"]
             self._th1_max  = data["th1_max"]
             self._th2_min  = data["th2_min"]
@@ -914,10 +986,11 @@ class PendulumChaosMap(QMainWindow):
             self._phys_m2  = data.get("m2", 1.0)
             self._phys_g   = data.get("g", 9.81)
             n = self._n_grid
-            mn, mx = int(self._grid.min()), int(self._grid.max())
+            grid = self._grids[self._metric]
+            mn, mx = grid.min(), grid.max()
             self._lbl_status.setText(
                 f"Loaded {n}×{n} grid from {fname.split('/')[-1]}\n"
-                f"Flips: min {mn},  max {mx}")
+                f"{self._metric}: min {mn},  max {mx}")
             self._update_display()
         except Exception as exc:
             self._lbl_status.setText(f"Load error: {exc}")
@@ -931,10 +1004,10 @@ class PendulumChaosMap(QMainWindow):
     # ── Display ──────────────────────────────────────────────────────────────
 
     def _update_display(self):
-        if self._grid is None:
+        if self._grids is None:
             return
 
-        grid = self._grid.astype(np.float64)
+        grid = self._grids[self._metric].astype(np.float64)
         if self._log_scale:
             grid = np.log1p(grid)
 
@@ -957,7 +1030,10 @@ class PendulumChaosMap(QMainWindow):
         # Reuse the dedicated colorbar axes (avoids remove()/subplotspec crash)
         self._cbar_ax.clear()
         self._cbar_ax.set_visible(True)
-        label = "log(1 + flips)" if self._log_scale else "Flip count (θ₂)"
+        if self._log_scale:
+            label = f"log(1 + {self._metric})"
+        else:
+            label = self._metric
         self._colorbar = self.fig.colorbar(self._im, cax=self._cbar_ax,
                                            label=label)
         self._colorbar.ax.yaxis.set_tick_params(color="#556", labelcolor="#aaa")
@@ -970,6 +1046,10 @@ class PendulumChaosMap(QMainWindow):
         self._cmap_name = name
         self._update_display()
 
+    def _on_metric_change(self, name):
+        self._metric = name
+        self._update_display()
+
     def _on_log_toggle(self, state):
         self._log_scale = bool(state)
         self._update_display()
@@ -977,12 +1057,13 @@ class PendulumChaosMap(QMainWindow):
     # ── Hover ────────────────────────────────────────────────────────────────
 
     def _on_hover(self, event):
-        if self._grid is None or event.inaxes != self.ax:
+        if self._grids is None or event.inaxes != self.ax:
             return
         th1, th2 = event.xdata, event.ydata
         if th1 is None or th2 is None:
             return
-        n2, n1 = self._grid.shape
+        grid = self._grids[self._metric]
+        n2, n1 = grid.shape
         # convert to grid indices
         ci = int(round((th1 - self._th1_min) / (self._th1_max - self._th1_min)
                        * (n1 - 1)))
@@ -990,14 +1071,19 @@ class PendulumChaosMap(QMainWindow):
                        * (n2 - 1)))
         ci = np.clip(ci, 0, n1 - 1)
         ri = np.clip(ri, 0, n2 - 1)
-        flips = self._grid[ri, ci]
+        val = grid[ri, ci]
+        if self._metric == "Peak |ω₂|":
+            val_str = f"{val:.1f} rad/s"
+        else:
+            val_str = str(int(val))
         self._lbl_status.setText(
-            f"θ₁ = {th1:.1f}°   θ₂ = {th2:.1f}°   flips = {flips}")
+            f"θ₁ = {th1:.1f}°   θ₂ = {th2:.1f}°   "
+            f"{self._metric} = {val_str}")
 
     # ── Click → open pendulum preview ────────────────────────────────────────
 
     def _on_click(self, event):
-        if self._grid is None or event.inaxes != self.ax:
+        if self._grids is None or event.inaxes != self.ax:
             return
         if event.button != 1:       # left click only
             return
@@ -1021,11 +1107,11 @@ class PendulumChaosMap(QMainWindow):
     # ── Export ───────────────────────────────────────────────────────────────
 
     def _export(self):
-        if self._grid is None:
+        if self._grids is None:
             self._lbl_status.setText("Nothing to export — run Compute first.")
             return
 
-        grid = self._grid.astype(np.float64)
+        grid = self._grids[self._metric].astype(np.float64)
         if self._log_scale:
             grid = np.log1p(grid)
 
@@ -1043,14 +1129,17 @@ class PendulumChaosMap(QMainWindow):
         ax_e.set_ylabel("θ₂  (degrees)", color=CTRL_FG, fontsize=10)
         ax_e.set_title("Double Pendulum Chaos Map", color=CTRL_FG, fontsize=13)
         ax_e.tick_params(colors="#556", labelsize=8)
-        label = "log(1 + flips)" if self._log_scale else "Flip count (θ₂)"
+        if self._log_scale:
+            label = f"log(1 + {self._metric})"
+        else:
+            label = self._metric
         cb = fig_e.colorbar(im, ax=ax_e, label=label)
         cb.ax.yaxis.set_tick_params(color="#556", labelcolor="#aaa")
         cb.set_label(label, color=CTRL_FG, fontsize=9)
         fig_e.tight_layout()
 
         ts = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
-        n = self._grid.shape[0]
+        n = self._grids[self._metric].shape[0]
         fname = (f"chaos_map_{n}x{n}_t{self._t_end_v:.0f}s"
                  f"_{self._cmap_name}_{ts}.png")
         fig_e.savefig(fname, dpi=300, facecolor=DARK_BG)
