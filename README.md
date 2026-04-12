@@ -1,6 +1,6 @@
 # maths_fun
 
-Some fun ways to look at numbers and shapes — interactive visualizations of prime number spirals, generalised spirals, geometric spirographs, Fourier epicycles, Lissajous figures, a chaotic double pendulum with a chaos map explorer, and an interactive 3D three-body gravitational simulator.
+Some fun ways to look at numbers and shapes — interactive visualizations of prime number spirals, generalised spirals, geometric spirographs, Fourier epicycles, Lissajous figures, complex power iteration, a chaotic double pendulum with a chaos map explorer, and an interactive 3D three-body gravitational simulator.
 
 ## Programs
 
@@ -14,9 +14,10 @@ Some fun ways to look at numbers and shapes — interactive visualizations of pr
 | `fourier_explorer.py` | Fourier series visualizer — epicycle animation, amplitude spectrum, DFT complex-plane view |
 | `lissajous_explorer.py` | Lissajous figure explorer — double-pendulum physics, animated trace, damping, phase sweep, PNG export |
 | `double_pendulum.py` | Chaotic double pendulum — adjustable lengths, masses, gravity; fading trail; MP4 export |
-| `pendulum_chaos_map.py` | Double pendulum chaos map — 2D heatmap of stability vs chaos across initial angle space; click-to-preview; PNG/pkl export |
+| `pendulum_chaos_map.py` | Double pendulum chaos map — 2D heatmap of stability vs chaos across initial angle space; three selectable metrics; click-to-preview; PNG/pkl export |
 | `3_body_problem.py` | Interactive 3D three-body gravitational simulator — 7 presets, real-time collision handling, MP4 export |
 | `three_body_physics.py` | Physics engine for `3_body_problem.py` — ODE integration, collision detection, body colour/size helpers |
+| `complex_power_iterator.py` | Complex power iterator — iterate z→z^p on the complex plane with chained-vector visualisation; 9 presets across escape/spiral/converge behaviours |
 | `prime_gallery_100.py` | Static three-panel figure showing integers 1–100 across all three spirals |
 
 ---
@@ -49,7 +50,7 @@ pip install numpy matplotlib pygame PyQt5 scipy mpmath
 | `scipy` | `3_body_problem.py` (ODE integration) |
 | `mpmath` | `3_body_problem.py` (high-precision Figure-8 initial conditions) |
 | `pygame` | `spirograph.py` |
-| `PyQt5` | `spiral_duo.py`, `3_body_problem.py`, `pendulum_chaos_map.py` |
+| `PyQt5` | `spiral_duo.py`, `3_body_problem.py`, `pendulum_chaos_map.py`, `complex_power_iterator.py` |
 
 ### 3. Install ffmpeg (for MP4 export)
 
@@ -438,9 +439,17 @@ A PyQt5 application that maps out the stability landscape of the double pendulum
 
 The entire grid of pendulums (up to 500 × 500 = 250,000 simultaneous simulations) is integrated at once using a vectorised numpy RK4 solver. Computation runs in a background thread so the UI stays responsive.
 
-**Chaos metric — flip count**
+**Chaos metrics**
 
-Each cell counts how many times the second bob's angle θ2 crosses a multiple of π during the simulation — i.e. how many half-rotations it completes. A pendulum that swings gently back and forth scores 0; one that whips chaotically around the pivot accumulates many flips. This is the standard metric used in published double pendulum chaos maps and produces the characteristic fractal boundary between stable and chaotic regions.
+A dropdown at the top of the control panel selects which metric to display. All three are computed simultaneously during a single run — switching between them is instant, no recomputation needed.
+
+| Metric | What it measures |
+|--------|-----------------|
+| **Flips (θ₂)** | Number of times the outer bob goes "over the top" — i.e. θ₂ crosses ±π. A pendulum that swings gently scores 0; one that whips around the pivot accumulates many flips. This is the default and the most intuitive chaos indicator. |
+| **Flips (θ₁+θ₂)** | Same as above but counting full rotations of *both* bobs combined. Reveals chaos in the inner arm that θ₂-only misses. |
+| **Peak \|ω₂\|** | Maximum angular velocity (rad/s) reached by the outer bob during the entire simulation. Chaotic trajectories develop very high peak velocities; stable oscillations stay low. This metric produces a smooth, continuous colour gradient rather than discrete integer counts. |
+
+Flip detection uses wrapped-angle analysis: the raw angle is wrapped to [−π, π] each timestep, and a flip is counted when the wrapped angle jumps by more than π — meaning the bob physically crossed the vertical-up position. This correctly gives 0 flips for small-angle oscillations (where earlier methods using `floor(θ/π)` would false-positive on every zero-crossing).
 
 **Angular Range**
 - **θ1 min / max** — horizontal extent of the map (default −180° to 180°)
@@ -489,7 +498,7 @@ Multiple preview windows can be open simultaneously — each runs independently.
 
 **Hover tooltip**
 
-Move the mouse over the heatmap to see the exact θ1, θ2, and flip count at the cursor position in the status label.
+Move the mouse over the heatmap to see the exact θ1, θ2, and the selected metric's value at the cursor position in the status label.
 
 **Interesting things to try:**
 - Start with **Coarse 50** for a quick overview, then switch to **Fine 200** to see the fractal boundary in detail
@@ -587,6 +596,58 @@ The 3D view updates every frame using an asymmetric exponential moving average:
 - Load **Lagrange △**, increase **Separation Scale** to 2–3, and watch numerical drift slowly destabilise the equilateral arrangement
 - Load any preset, tilt the orbit 45–60°, rotate the 3D view with the mouse to find the best angle, then export an MP4
 - Set **Sun-Jupiter-Saturn** and run for Duration = 500 sim-yr to see the long-term quasi-periodic structure
+
+---
+
+### Complex Power Iterator — `complex_power_iterator.py`
+
+```bash
+conda activate maths_fun
+python complex_power_iterator.py
+```
+
+A PyQt5 application that visualises the iteration z → z^p on the complex plane. Enter a starting complex number z₀, choose a power (2, 3, or 4), and watch the sequence z₀, z₁ = z₀^p, z₂ = z₁^p, … drawn as a chain of colour-coded vectors originating from the origin.
+
+**How it works**
+
+Each iteration raises the current value to the chosen power. On the complex plane this has a geometric interpretation:
+- **Magnitude**: |z_{n+1}| = |z_n|^p — if |z₀| < 1 the magnitude shrinks to zero; if |z₀| > 1 it grows to infinity; if |z₀| = 1 exactly it stays on the unit circle
+- **Angle**: arg(z_{n+1}) = p × arg(z_n) — the angle multiplies by p each step, so points on the unit circle trace out orbits determined by number theory (the order of p modulo the denominator of the starting angle as a fraction of 2π)
+
+**Controls**
+- **z₀** — input field for the starting complex number (e.g. `0.8 + 0.6i`, `1.5 - i`, `0.3i`)
+- **Power p** — radio buttons for z², z³, z⁴
+- **Iterations n** — how many times to apply the power (1–50)
+- **Plot ▶** — compute and draw the iteration chain
+- **Clear** — reset the canvas
+
+**Display**
+- A dashed **unit circle** marks |z| = 1 — the boundary between convergence and escape
+- Colour-coded **arrows** show each step of the iteration (plasma colormap)
+- **Dots** at each z_k with subscript labels for the first six points
+- The **Values** panel lists all computed z_k with their magnitudes
+- If |z| exceeds 10⁶, iteration stops and an escape warning is shown
+
+**Presets** — nine presets in three groups:
+
+| Group | Preset | z₀ | p | n | Behaviour |
+|-------|--------|----|---|---|-----------|
+| **↗ Escape** | Slow Spiral | 0.9 + 0.44i | 2 | 15 | \|z₀\| ≈ 1.002 — spirals outward, escapes ~step 12 |
+| | Fast Burst | 1.5 + 1.0i | 2 | 8 | Clearly outside unit circle, escapes in ~5 steps |
+| | 4th Power | 1.1 + 0.3i | 4 | 10 | Higher power accelerates escape |
+| **◉ Spiral** | z² Orbit | 0.8 + 0.6i | 2 | 15 | Exactly \|z\| = 1 — angle-doubling map on the unit circle |
+| | Heptagon | 0.6235 + 0.7818i | 2 | 10 | 7th root of unity; 2³ ≡ 1 (mod 7), visits 3 points forming a triangle |
+| | 17-Star | 0.9325 + 0.3612i | 2 | 12 | 17th root of unity; 2⁸ ≡ 1 (mod 17), traces an 8-pointed star |
+| **↙ Converge** | Spiral Drain | 0.7 + 0.5i | 2 | 20 | \|z₀\| ≈ 0.86 — graceful inward spiral to zero |
+| | Quick Sink | 0.5 + 0.5i | 2 | 15 | \|z₀\| ≈ 0.71 — faster collapse |
+| | Cubic Drop | 0.8 + 0.3i | 3 | 12 | Cubic power accelerates convergence |
+
+**Interesting things to try:**
+- Click **17-Star** — the 8-pointed pattern arises because the order of 2 modulo 17 is 8, so squaring cycles through exactly 8 of the 17th roots of unity
+- Click **z² Orbit** — since 0.8 + 0.6i has |z| = 1 exactly (3-4-5 triangle), the iterates stay on the unit circle forever and the angle-doubling map produces a dense, ergodic orbit
+- Click **Slow Spiral** — the starting point is barely outside the unit circle (|z| ≈ 1.002), so the iterates hug the circle for many steps before finally escaping
+- Try z₀ = `i` with p = 2 — the sequence is i → −1 → 1 → 1 → 1 … (a fixed point)
+- Try z₀ = `-1 + 0i` with p = 3 — the sequence is −1 → −1 → −1 … (another fixed point)
 
 ---
 
