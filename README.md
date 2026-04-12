@@ -15,6 +15,7 @@ Some fun ways to look at numbers and shapes — interactive visualizations of pr
 | `lissajous_explorer.py` | Lissajous figure explorer — double-pendulum physics, animated trace, damping, phase sweep, PNG export |
 | `double_pendulum.py` | Chaotic double pendulum — adjustable lengths, masses, gravity; fading trail; MP4 export |
 | `pendulum_chaos_map.py` | Double pendulum chaos map — 2D heatmap of stability vs chaos across initial angle space; three selectable metrics; click-to-preview; PNG/pkl export |
+| `pendulum_chaos_map_cuda.py` | CUDA multi-GPU edition of the chaos map — Numba CUDA kernel (one thread per pendulum), multi-GPU row splitting, fp32/fp64 toggle, CPU fallback |
 | `3_body_problem.py` | Interactive 3D three-body gravitational simulator — 7 presets, real-time collision handling, MP4 export |
 | `three_body_physics.py` | Physics engine for `3_body_problem.py` — ODE integration, collision detection, body colour/size helpers |
 | `complex_power_iterator.py` | Complex power iterator — iterate z→z^p on the complex plane with chained-vector visualisation; 9 presets across escape/spiral/converge behaviours |
@@ -50,7 +51,8 @@ pip install numpy matplotlib pygame PyQt5 scipy mpmath
 | `scipy` | `3_body_problem.py` (ODE integration) |
 | `mpmath` | `3_body_problem.py` (high-precision Figure-8 initial conditions) |
 | `pygame` | `spirograph.py` |
-| `PyQt5` | `spiral_duo.py`, `3_body_problem.py`, `pendulum_chaos_map.py`, `complex_power_iterator.py` |
+| `PyQt5` | `spiral_duo.py`, `3_body_problem.py`, `pendulum_chaos_map.py`, `pendulum_chaos_map_cuda.py`, `complex_power_iterator.py` |
+| `numba` | `pendulum_chaos_map_cuda.py` (CUDA GPU acceleration) |
 
 ### 3. Install ffmpeg (for MP4 export)
 
@@ -65,6 +67,33 @@ To verify it is available:
 ```bash
 python -c "from matplotlib.animation import FFMpegWriter; print(FFMpegWriter.isAvailable())"
 ```
+
+### 4. Install CUDA toolkit (for GPU-accelerated chaos map)
+
+`pendulum_chaos_map_cuda.py` uses Numba CUDA to run one GPU thread per pendulum. This requires an NVIDIA GPU, an NVIDIA driver, and a matching CUDA toolkit.
+
+1. Check your driver's supported CUDA version:
+
+```bash
+nvidia-smi   # "CUDA Version: XX.X" in the top-right corner
+```
+
+2. Install numba and a matching cuda-toolkit via conda:
+
+```bash
+# Replace 13.0 with whatever nvidia-smi reports (e.g. 12.4, 12.6, 13.0)
+conda install -n maths_fun -c conda-forge numba cuda-toolkit=13.0
+```
+
+The toolkit version must match the driver — a mismatch produces `CUDA_ERROR_UNSUPPORTED_PTX_VERSION`. If in doubt, install the exact version shown by `nvidia-smi`.
+
+3. Verify CUDA is available:
+
+```bash
+conda run -n maths_fun python -c "from numba import cuda; print(f'CUDA: {cuda.is_available()}, GPUs: {len(cuda.gpus)}')"
+```
+
+The program works without CUDA — it falls back to the CPU (NumPy) backend automatically.
 
 ### Running programs
 
@@ -507,6 +536,71 @@ Move the mouse over the heatmap to see the exact θ1, θ2, and the selected metr
 - Narrow the angular range to a small region around the stable/chaotic boundary (e.g. θ1: 80° to 130°, θ2: 20° to 70°) and compute at Fine resolution — the fractal self-similarity becomes apparent
 - Reduce **g** to 1–2 m/s² and recompute — the chaotic region shrinks as gravity weakens
 - Set **m1 = 5.0, m2 = 0.1** — the mass asymmetry changes the shape of the stable regions
+
+---
+
+### Double Pendulum Chaos Map (CUDA) — `pendulum_chaos_map_cuda.py`
+
+```bash
+conda activate maths_fun
+python pendulum_chaos_map_cuda.py
+```
+
+GPU-accelerated version of the chaos map. The physics, UI layout, metrics, preview windows, hover, click, export, and pkl format are all identical to `pendulum_chaos_map.py` — the difference is the compute engine.
+
+**How it works**
+
+A single Numba CUDA kernel (`_chaos_kernel`) runs one GPU thread per pendulum. Each thread carries the full state (θ₁, ω₁, θ₂, ω₂) in registers, integrates all 10,000 RK4 steps locally, tracks flip counts and peak |ω₂|, and writes three output values. No shared memory or inter-thread communication is needed — the workload is embarrassingly parallel.
+
+For multi-GPU systems the grid rows are split evenly across selected GPUs. Each GPU is driven by its own host thread via `ThreadPoolExecutor`; the GIL is released during kernel execution so all GPUs run concurrently.
+
+**Backend controls**
+
+The "Backend" group box replaces the CPU "Workers" control:
+
+| Control | Purpose |
+|---------|---------|
+| **Engine** | Switch between CUDA (GPU) and CPU (NumPy). CUDA is greyed out if no GPU is detected. |
+| **GPU checkboxes** | One per detected GPU, showing the device name. Tick the GPUs you want to use. |
+| **Precision** | float32 (fast) or float64. Consumer GPUs have 32× higher fp32 throughput — for a visualization heatmap, fp32 is more than sufficient. |
+
+When the CPU backend is selected, a Workers spinbox appears instead (same behaviour as the original program).
+
+**Resolution presets**
+
+Five preset buttons are provided for common grid sizes:
+
+| Preset | Grid | Pendulums |
+|--------|------|-----------|
+| Coarse 50 | 50 × 50 | 2,500 |
+| Med 100 | 100 × 100 | 10,000 |
+| Fine 200 | 200 × 200 | 40,000 |
+| HD 500 | 500 × 500 | 250,000 |
+| Ultra 1K | 1000 × 1000 | 1,000,000 |
+
+The N × N spinbox allows values up to 5000 × 5000 (25 million pendulums).
+
+**Performance**
+
+Benchmark on a 2-GPU system (t = 20 s, fp32, default physics):
+
+| Grid | Pendulums | Time |
+|------|-----------|------|
+| 4000 × 4000 | 16,000,000 | ~240 s |
+
+This is orders of magnitude faster than the CPU version for large grids. Exact timings depend on GPU model, precision, simulation duration, and number of GPUs.
+
+**Pkl cross-compatibility**
+
+The `.pkl` format is identical between the CPU and CUDA versions. Files saved by one can be loaded by the other — no conversion needed.
+
+**Pre-computed map**
+
+A pre-computed 1000 × 1000 chaos map is included in the repository (`chaos_map_1000x1000_t20s_20260412_105139.pkl`) so you can explore the full-resolution heatmap without running any computation. Click **Load .pkl** in either version of the program and select the file.
+
+**Everything else**
+
+All other features work exactly as described in the `pendulum_chaos_map.py` section above: chaos metrics, angular range sliders, physics parameters, colormap/log-scale display, hover tooltip, click-to-preview, Export PNG, and Load .pkl.
 
 ---
 
