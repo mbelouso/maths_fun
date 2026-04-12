@@ -663,8 +663,14 @@ class PendulumChaosMap(QMainWindow):
         self._colorbar = None
 
         # mouse events
-        self._canvas.mpl_connect("motion_notify_event", self._on_hover)
-        self._canvas.mpl_connect("button_press_event", self._on_click)
+        self._canvas.mpl_connect("motion_notify_event", self._on_mouse_move)
+        self._canvas.mpl_connect("button_press_event", self._on_mouse_press)
+        self._canvas.mpl_connect("button_release_event", self._on_mouse_release)
+        self._canvas.mpl_connect("scroll_event", self._on_scroll)
+
+        # pan state
+        self._panning = False
+        self._pan_start = None
 
     # ── Controls ─────────────────────────────────────────────────────────────
 
@@ -818,6 +824,10 @@ class PendulumChaosMap(QMainWindow):
         self._btn_load = QPushButton("Load .pkl")
         self._btn_load.clicked.connect(self._load_pkl)
         g_lay.addWidget(self._btn_load)
+
+        self._btn_reset_view = QPushButton("Reset View")
+        self._btn_reset_view.clicked.connect(self._reset_view)
+        g_lay.addWidget(self._btn_reset_view)
         lay.addWidget(grp)
 
         # ── Status ───────────────────────────────────────────────────────
@@ -1054,7 +1064,56 @@ class PendulumChaosMap(QMainWindow):
         self._log_scale = bool(state)
         self._update_display()
 
-    # ── Hover ────────────────────────────────────────────────────────────────
+    # ── Mouse: hover, click, pan, zoom ────────────────────────────────────────
+
+    def _on_mouse_press(self, event):
+        if event.inaxes != self.ax:
+            return
+        if event.button == 1:           # left click → open preview
+            self._on_click(event)
+        elif event.button == 3:         # right click → start pan
+            self._panning = True
+            self._pan_start = (event.xdata, event.ydata)
+
+    def _on_mouse_release(self, event):
+        if event.button == 3:
+            self._panning = False
+            self._pan_start = None
+
+    def _on_mouse_move(self, event):
+        if self._panning and self._pan_start and event.inaxes == self.ax:
+            if event.xdata is None or event.ydata is None:
+                return
+            dx = self._pan_start[0] - event.xdata
+            dy = self._pan_start[1] - event.ydata
+            x0, x1 = self.ax.get_xlim()
+            y0, y1 = self.ax.get_ylim()
+            self.ax.set_xlim(x0 + dx, x1 + dx)
+            self.ax.set_ylim(y0 + dy, y1 + dy)
+            self._canvas.draw_idle()
+            return
+        # hover tooltip
+        self._on_hover(event)
+
+    def _on_scroll(self, event):
+        if event.inaxes != self.ax:
+            return
+        if event.xdata is None or event.ydata is None:
+            return
+        factor = 0.8 if event.button == "up" else 1.25
+        x0, x1 = self.ax.get_xlim()
+        y0, y1 = self.ax.get_ylim()
+        cx, cy = event.xdata, event.ydata
+        self.ax.set_xlim(cx + (x0 - cx) * factor, cx + (x1 - cx) * factor)
+        self.ax.set_ylim(cy + (y0 - cy) * factor, cy + (y1 - cy) * factor)
+        self._canvas.draw_idle()
+
+    def _reset_view(self):
+        if self._grids is None:
+            return
+        self.ax.set_xlim(self._th1_min, self._th1_max)
+        self.ax.set_ylim(self._th2_min, self._th2_max)
+        self._canvas.draw_idle()
 
     def _on_hover(self, event):
         if self._grids is None or event.inaxes != self.ax:
@@ -1079,8 +1138,6 @@ class PendulumChaosMap(QMainWindow):
         self._lbl_status.setText(
             f"θ₁ = {th1:.1f}°   θ₂ = {th2:.1f}°   "
             f"{self._metric} = {val_str}")
-
-    # ── Click → open pendulum preview ────────────────────────────────────────
 
     def _on_click(self, event):
         if self._grids is None or event.inaxes != self.ax:

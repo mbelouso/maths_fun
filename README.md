@@ -514,6 +514,15 @@ Estimated compute times (t = 20 s, default physics):
 - **▶ Compute** — starts the simulation in a background thread. A progress bar shows completion. Results are auto-saved to a `.pkl` file in the current directory
 - **Export PNG** — saves a high-resolution (300 DPI, 12 × 10 inch) image with the current colormap and axis labels. Filename encodes grid size, duration, colormap, and timestamp
 - **Load .pkl** — opens a file dialog to reload any previously saved result. The heatmap, axis ranges, and physics parameters are restored instantly
+- **Reset View** — restores the view to the full angular range after zooming or panning
+
+**Zoom and pan**
+
+- **Scroll wheel** — zoom in/out centered on the cursor position. Useful for inspecting fine fractal structure at the chaos boundary
+- **Right-click drag** — pan the view to slide across the map
+- **Reset View** button (or recompute) returns to the full angular range
+
+This makes it much easier to click on small stable patches that are hard to target when the map is fully zoomed out.
 
 **Click to preview**
 
@@ -600,7 +609,7 @@ A pre-computed 1000 × 1000 chaos map is included in the repository (`chaos_map_
 
 **Everything else**
 
-All other features work exactly as described in the `pendulum_chaos_map.py` section above: chaos metrics, angular range sliders, physics parameters, colormap/log-scale display, hover tooltip, click-to-preview, Export PNG, and Load .pkl.
+All other features work exactly as described in the `pendulum_chaos_map.py` section above: chaos metrics, angular range sliders, physics parameters, colormap/log-scale display, zoom and pan (scroll wheel / right-click drag), hover tooltip, click-to-preview, Export PNG, and Load .pkl.
 
 ---
 
