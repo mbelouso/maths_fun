@@ -1,55 +1,371 @@
 #!/usr/bin/env python3
 """
-Spiral Artist
-=============
+Spiral Artist  (PyQt5 edition)
+==============================
 Generalized spirograph: r(k) = k^p,  θ(k) = k × angle°,  k = 1 … N.
 
-Controls
---------
-  Spiral formula : N points, r exponent (p), θ step (°) — sliders with keyboard input
-  Presets        : Sunflower | Alt. golden | Pentagon | Galaxy
-  Visual style   : line width, line alpha, dot size; display mode (Dots | Line | Both)
-  Palette        : 10 gradient colormaps + reverse
-  Background     : Dark | Light
-  Export         : save high-resolution PNG at 150 / 300 / 600 dpi
+Controls live in a PyQt5 panel; spiral geometry is computed in a background
+thread so the UI stays responsive while dragging sliders.
+
+Export dialog lets you pick background (Dark / Light / White / Transparent),
+DPI, and output size independently of what you see on screen.
 
 Usage
 -----
-    python spiral_artist.py
+    conda run -n maths_fun python3 spiral_artist.py
 """
 
+import sys
+import threading
+
 import numpy as np
+import matplotlib
+matplotlib.use("Qt5Agg")
 import matplotlib.pyplot as plt
+from matplotlib.backends.backend_qt5agg import FigureCanvasQTAgg
+from matplotlib.figure import Figure
 from matplotlib.collections import LineCollection
-from matplotlib.widgets import Slider, RadioButtons, Button, TextBox
-import matplotlib.gridspec as gridspec
 
-# ── UI colours (control panel — always dark) ───────────────────────────────────
+from PyQt5.QtWidgets import (
+    QApplication, QMainWindow, QWidget, QVBoxLayout, QHBoxLayout,
+    QGridLayout, QLabel, QSlider, QDoubleSpinBox, QSpinBox, QGroupBox,
+    QPushButton, QComboBox, QCheckBox, QScrollArea, QSizePolicy,
+    QDialog, QFormLayout,
+)
+from PyQt5.QtCore import Qt, QTimer, QObject, pyqtSignal
 
-CTRL_BG = "#12122a"
-CTRL_FG = "#ccccee"
-ACC_C   = "#7788ff"
-GOLD    = "#FFD700"
-BTN_OFF = "#1a1a3e"
-BTN_ON  = "#1a3a50"
-
-# Plot background options
+# ── Colours ─────────────────────────────────────────────────────────────────────
 DARK_BG  = "#0d0d1a"
 LIGHT_BG = "#f5f5f0"
+CTRL_BG  = "#12122a"
+CTRL_FG  = "#ccccee"
+ACC_C    = "#7788ff"
+GOLD     = "#FFD700"
 
 GOLDEN_ANGLE = 180.0 * (3.0 - np.sqrt(5.0))   # ≈ 137.508°
 ALT_GOLDEN   = 360.0 - GOLDEN_ANGLE            # ≈ 222.492°
 
+QSS = f"""
+QMainWindow, QWidget    {{ background: {CTRL_BG}; color: {CTRL_FG}; }}
+QGroupBox {{
+    border: 1px solid #334; border-radius: 4px; margin-top: 8px;
+    font-size: 8pt; color: {GOLD}; font-weight: bold;
+}}
+QGroupBox::title {{ subcontrol-origin: margin; left: 8px; padding: 0 2px; }}
+QSlider::groove:horizontal {{ height: 4px; background: #334; border-radius: 2px; }}
+QSlider::handle:horizontal {{
+    background: {ACC_C}; width: 12px; height: 12px;
+    border-radius: 6px; margin: -4px 0;
+}}
+QSlider::sub-page:horizontal {{ background: {ACC_C}; border-radius: 2px; }}
+QDoubleSpinBox, QSpinBox {{
+    background: #1a1a2e; color: {CTRL_FG}; border: 1px solid #334;
+    border-radius: 3px; padding: 1px 3px; font-size: 8pt;
+}}
+QPushButton {{
+    background: #1a1a3e; color: {CTRL_FG}; border: 1px solid #334;
+    border-radius: 3px; padding: 3px 6px; font-size: 8pt;
+}}
+QPushButton:hover   {{ background: #223355; }}
+QPushButton:checked {{ background: #1a3a50; border-color: {ACC_C}; }}
+QComboBox {{
+    background: #1a1a2e; color: {CTRL_FG}; border: 1px solid #334;
+    border-radius: 3px; padding: 2px 4px; font-size: 8pt;
+}}
+QComboBox QAbstractItemView {{
+    background: #1a1a2e; color: {CTRL_FG};
+    selection-background-color: #223355;
+}}
+QCheckBox  {{ color: {CTRL_FG}; font-size: 8pt; }}
+QLabel     {{ color: {CTRL_FG}; font-size: 8pt; }}
+QScrollArea {{ border: none; }}
+QScrollBar:vertical   {{ background: #1a1a2e; width: 8px; }}
+QScrollBar::handle:vertical {{ background: #334; border-radius: 4px; }}
+QDialog {{ background: {CTRL_BG}; }}
+"""
 
-# ── Main class ─────────────────────────────────────────────────────────────────
 
-class SpiralArtist:
-    MAX_N = 100_000
+# ── Thread-safe signal bridge ────────────────────────────────────────────────────
+class _StatusBridge(QObject):
+    finished = pyqtSignal(object)
+    error    = pyqtSignal(str)
+
+
+# ── Float param slider  (QLabel + QSlider 0-1000 + QDoubleSpinBox) ───────────────
+class _ParamSlider(QWidget):
+    valueChanged = pyqtSignal(float)
+
+    def __init__(self, label, vmin, vmax, vinit, decimals=2, parent=None):
+        super().__init__(parent)
+        self._vmin = float(vmin)
+        self._vmax = float(vmax)
+        self._block = False
+
+        lay = QVBoxLayout(self)
+        lay.setContentsMargins(2, 1, 2, 1)
+        lay.setSpacing(1)
+        lay.addWidget(QLabel(label))
+
+        row = QWidget()
+        rl  = QHBoxLayout(row)
+        rl.setContentsMargins(0, 0, 0, 0)
+        rl.setSpacing(3)
+        lay.addWidget(row)
+
+        self._sl = QSlider(Qt.Horizontal)
+        self._sl.setRange(0, 1000)
+        self._sl.setValue(self._to_ticks(vinit))
+        rl.addWidget(self._sl, 3)
+
+        self._sb = QDoubleSpinBox()
+        self._sb.setDecimals(decimals)
+        self._sb.setRange(self._vmin, self._vmax)
+        self._sb.setValue(float(vinit))
+        self._sb.setFixedWidth(72)
+        rl.addWidget(self._sb)
+
+        self._sl.valueChanged.connect(self._from_slider)
+        self._sb.valueChanged.connect(self._from_spin)
+
+    def _to_ticks(self, v):
+        span = self._vmax - self._vmin
+        return int(round(1000.0 * (float(v) - self._vmin) / span)) if span else 0
+
+    def _from_ticks(self, t):
+        return self._vmin + t * (self._vmax - self._vmin) / 1000.0
+
+    def _from_slider(self, ticks):
+        if self._block:
+            return
+        v = self._from_ticks(ticks)
+        self._block = True
+        self._sb.setValue(v)
+        self._block = False
+        self.valueChanged.emit(v)
+
+    def _from_spin(self, v):
+        if self._block:
+            return
+        self._block = True
+        self._sl.setValue(self._to_ticks(v))
+        self._block = False
+        self.valueChanged.emit(v)
+
+    def value(self):
+        return self._sb.value()
+
+    def set_value(self, v, silent=True):
+        v = float(np.clip(v, self._vmin, self._vmax))
+        self._block = True
+        self._sl.setValue(self._to_ticks(v))
+        self._sb.setValue(v)
+        self._block = False
+        if not silent:
+            self.valueChanged.emit(v)
+
+
+# ── Integer param slider  (QLabel + QSlider 0-1000 + QSpinBox) ──────────────────
+class _IntParamSlider(QWidget):
+    valueChanged = pyqtSignal(int)
+
+    def __init__(self, label, vmin, vmax, vinit, parent=None):
+        super().__init__(parent)
+        self._vmin = int(vmin)
+        self._vmax = int(vmax)
+        self._block = False
+
+        lay = QVBoxLayout(self)
+        lay.setContentsMargins(2, 1, 2, 1)
+        lay.setSpacing(1)
+        lay.addWidget(QLabel(label))
+
+        row = QWidget()
+        rl  = QHBoxLayout(row)
+        rl.setContentsMargins(0, 0, 0, 0)
+        rl.setSpacing(3)
+        lay.addWidget(row)
+
+        self._sl = QSlider(Qt.Horizontal)
+        self._sl.setRange(0, 1000)
+        self._sl.setValue(self._to_ticks(vinit))
+        rl.addWidget(self._sl, 3)
+
+        self._sb = QSpinBox()
+        self._sb.setRange(self._vmin, self._vmax)
+        self._sb.setValue(int(vinit))
+        self._sb.setFixedWidth(72)
+        rl.addWidget(self._sb)
+
+        self._sl.valueChanged.connect(self._from_slider)
+        self._sb.valueChanged.connect(self._from_spin)
+
+    def _to_ticks(self, v):
+        span = self._vmax - self._vmin
+        return int(round(1000.0 * (float(v) - self._vmin) / span)) if span else 0
+
+    def _from_ticks(self, t):
+        return int(round(self._vmin + t * (self._vmax - self._vmin) / 1000.0))
+
+    def _from_slider(self, ticks):
+        if self._block:
+            return
+        v = self._from_ticks(ticks)
+        self._block = True
+        self._sb.setValue(v)
+        self._block = False
+        self.valueChanged.emit(v)
+
+    def _from_spin(self, v):
+        if self._block:
+            return
+        self._block = True
+        self._sl.setValue(self._to_ticks(v))
+        self._block = False
+        self.valueChanged.emit(v)
+
+    def value(self):
+        return self._sb.value()
+
+    def set_value(self, v, silent=True):
+        v = int(np.clip(v, self._vmin, self._vmax))
+        self._block = True
+        self._sl.setValue(self._to_ticks(v))
+        self._sb.setValue(v)
+        self._block = False
+        if not silent:
+            self.valueChanged.emit(v)
+
+
+# ── Export dialog ────────────────────────────────────────────────────────────────
+class _ExportDialog(QDialog):
+    _SIZES = [
+        ("Sq 2K   2160×2160",  2160, 2160),
+        ("Sq 4K   4096×4096",  4096, 4096),
+        ("Sq 6K   6000×6000",  6000, 6000),
+        ("1080p   1920×1080",  1920, 1080),
+        ("1440p   2560×1440",  2560, 1440),
+        ("4K      3840×2160",  3840, 2160),
+    ]
+    _DPIS = [72, 100, 150, 200, 300, 600, 1200]
+    _BGS  = ["Dark", "Light", "White", "Transparent"]
+
+    def __init__(self, artist, parent=None):
+        super().__init__(parent)
+        self._artist = artist
+        self.setWindowTitle("Export PNG")
+        self.setModal(True)
+        self.setStyleSheet(QSS)
+        self.setMinimumWidth(340)
+
+        lay = QVBoxLayout(self)
+        lay.setSpacing(10)
+
+        form = QFormLayout()
+        form.setSpacing(6)
+        lay.addLayout(form)
+
+        self._cb_bg = QComboBox()
+        self._cb_bg.addItems(self._BGS)
+        self._cb_bg.setCurrentIndex(0 if artist.plot_bg == DARK_BG else 1)
+        form.addRow("Background:", self._cb_bg)
+
+        self._cb_dpi = QComboBox()
+        for d in self._DPIS:
+            self._cb_dpi.addItem(f"{d} dpi")
+        self._cb_dpi.setCurrentIndex(self._DPIS.index(300))
+        form.addRow("DPI:", self._cb_dpi)
+
+        self._cb_size = QComboBox()
+        for label, _w, _h in self._SIZES:
+            self._cb_size.addItem(label)
+        form.addRow("Size:", self._cb_size)
+
+        self._lbl_status = QLabel("")
+        self._lbl_status.setWordWrap(True)
+        lay.addWidget(self._lbl_status)
+
+        self._btn_export = QPushButton("Export PNG")
+        self._btn_export.clicked.connect(self._do_export)
+        lay.addWidget(self._btn_export)
+
+        btn_close = QPushButton("Close")
+        btn_close.clicked.connect(self.accept)
+        lay.addWidget(btn_close)
+
+    def _do_export(self):
+        bg_name = self._cb_bg.currentText()
+        dpi     = self._DPIS[self._cb_dpi.currentIndex()]
+        _, W, H = self._SIZES[self._cb_size.currentIndex()]
+
+        bg_color    = {"Dark": DARK_BG, "Light": LIGHT_BG,
+                       "White": "white", "Transparent": "none"}[bg_name]
+        transparent = (bg_name == "Transparent")
+
+        self._btn_export.setEnabled(False)
+        self._lbl_status.setText("Exporting…")
+
+        artist = self._artist
+
+        def worker():
+            try:
+                xs, ys = artist._compute_coords(artist.n, artist.r_exp, artist.angle)
+                lw     = max(0.5, artist.line_width * min(W, H) / 1800)
+
+                fig = Figure(figsize=(W / dpi, H / dpi), facecolor=bg_color)
+                ax  = fig.add_axes([0, 0, 1, 1], facecolor=bg_color)
+                ax.set_aspect("equal")
+                ax.axis("off")
+
+                if artist.mode in ("Line", "Both"):
+                    colors = artist._palette_colors(len(xs))
+                    pts    = np.column_stack([xs, ys]).reshape(-1, 1, 2)
+                    segs   = np.concatenate([pts[:-1], pts[1:]], axis=1)
+                    lc = LineCollection(segs, colors=colors[:-1],
+                                        linewidth=lw, alpha=artist.line_alpha,
+                                        capstyle="round")
+                    ax.add_collection(lc)
+
+                if artist.mode in ("Dots", "Both"):
+                    colors = artist._palette_colors(len(xs))
+                    ax.scatter(xs, ys, c=colors, s=artist.dot_size,
+                               linewidths=0, rasterized=True)
+
+                ax.autoscale_view()
+
+                pal   = artist.palette[:4]
+                rev   = "r" if artist.reverse_pal else ""
+                fname = (
+                    f"spiral_{artist.angle:.2f}deg"
+                    f"_p{artist.r_exp:.2f}"
+                    f"_N{artist.n}"
+                    f"_{pal}{rev}"
+                    f"_{bg_name.lower()}_{W}x{H}@{dpi}dpi.png"
+                )
+                fig.savefig(fname, dpi=dpi, bbox_inches="tight",
+                            pad_inches=0.02, transparent=transparent)
+                plt.close(fig)
+                artist._export_bridge.finished.emit(fname)
+            except Exception as exc:
+                artist._export_bridge.error.emit(str(exc))
+
+        threading.Thread(target=worker, daemon=True).start()
+
+    def on_export_done(self, fname):
+        self._lbl_status.setText(f"Saved: {fname}")
+        self._btn_export.setEnabled(True)
+
+    def on_export_error(self, msg):
+        self._lbl_status.setText(f"Error: {msg}")
+        self._btn_export.setEnabled(True)
+
+
+# ── Main window ──────────────────────────────────────────────────────────────────
+class SpiralArtist(QMainWindow):
+    MAX_N    = 100_000
     PALETTES = [
         "plasma", "viridis", "inferno", "magma", "turbo",
         "rainbow", "cool", "twilight", "hot", "hsv",
     ]
-
     DEFAULTS = dict(
         n           = 3_000,
         r_exp       = 0.5,
@@ -61,233 +377,182 @@ class SpiralArtist:
         palette     = "plasma",
         reverse_pal = False,
         plot_bg     = DARK_BG,
-        export_dpi  = 300,
     )
 
     def __init__(self):
+        super().__init__()
         for k, v in self.DEFAULTS.items():
             setattr(self, k, v)
 
-        self._batch   = False
-        self._drawing = False
+        self._generation  = 0
+        self._last_coords = None          # (xs, ys) from last successful compute
 
-        self._build_figure()
-        self._draw()
+        # Bridges
+        self._bridge = _StatusBridge()
+        self._bridge.finished.connect(self._on_compute_done)
+        self._bridge.error.connect(self._on_compute_error)
 
-    # ── Layout ────────────────────────────────────────────────────────────────
+        self._export_bridge = _StatusBridge()
 
-    def _build_figure(self):
-        plt.rcParams.update({
-            "figure.facecolor": CTRL_BG,
-            "axes.facecolor":   CTRL_BG,
-            "axes.edgecolor":   "#334",
-            "text.color":       CTRL_FG,
-            "xtick.color":      "#556",
-            "ytick.color":      "#556",
-        })
+        # Debounce: physics changes wait 250 ms before spawning thread
+        self._render_timer = QTimer(self)
+        self._render_timer.setSingleShot(True)
+        self._render_timer.setInterval(250)
+        self._render_timer.timeout.connect(self._start_compute)
 
-        self.fig = plt.figure(figsize=(15, 9), facecolor=CTRL_BG)
-        if self.fig.canvas.manager is not None:
-            self.fig.canvas.manager.set_window_title("Spiral Artist")
+        self.setWindowTitle("Spiral Artist")
+        self.setStyleSheet(QSS)
+        self.resize(1400, 860)
 
-        outer = gridspec.GridSpec(
-            1, 2, width_ratios=[3, 1],
-            left=0.03, right=0.98, top=0.94, bottom=0.04, wspace=0.04,
-        )
-        self.ax = self.fig.add_subplot(outer[0], facecolor=self.plot_bg)
+        self._build_plot()
+        self._build_controls()
+        self._wire_layout()
 
-        heights = [
-            0.4, 1.3, 1.3, 1.3,   # "Spiral formula" header + N, p, angle
-            1.1,                    # presets 2×2
-            0.4, 1.3, 1.1, 1.1,   # "Visual style" header + lw, alpha, dotsize
-            1.0,                    # display mode buttons
-            0.4, 5.2,              # "Palette" header + 10-item radio
-            0.9,                    # reverse button
-            0.4, 1.0,              # "Background" header + dark/light buttons
-            0.35, 1.5,             # "Export" header + export row
-        ]
-        ctrl = gridspec.GridSpecFromSubplotSpec(
-            len(heights), 1, subplot_spec=outer[1],
-            hspace=0.25, height_ratios=heights,
-        )
+        QTimer.singleShot(80, self._start_compute)
 
-        def hdr(row, text):
-            a = self.fig.add_subplot(ctrl[row], facecolor=CTRL_BG)
-            a.set_axis_off()
-            a.text(0.5, 0.5, text, ha="center", va="center",
-                   color=GOLD, fontsize=9, fontweight="bold")
+    # ── Canvas ────────────────────────────────────────────────────────────────
 
-        def plain_btn(ax, text, active=False):
-            b = Button(ax, text, color=BTN_ON if active else BTN_OFF,
-                       hovercolor="#223355")
-            b.label.set_color(CTRL_FG)
-            b.label.set_fontsize(8)
-            return b
+    def _build_plot(self):
+        self.fig     = Figure(facecolor=DARK_BG)
+        self._canvas = FigureCanvasQTAgg(self.fig)
+        self._canvas.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Expanding)
+        self.ax = self.fig.add_axes([0.01, 0.01, 0.98, 0.95])
+        self.ax.set_facecolor(self.plot_bg)
+        self.ax.set_aspect("equal")
+        self.ax.axis("off")
 
-        # ── Spiral formula ───────────────────────────────────────────────────
-        hdr(0, "Spiral formula")
-
-        self.sl_n,     self.tb_n     = self._slider_tb_row(ctrl, 1,
-            "N",      10, self.MAX_N, self.n,     "%d",    int,   "n")
-        self.sl_rexp,  self.tb_rexp  = self._slider_tb_row(ctrl, 2,
-            "k ^  p", 0.1, 3.0,      self.r_exp, "%.2f",  float, "r_exp")
-        self.sl_angle, self.tb_angle = self._slider_tb_row(ctrl, 3,
-            "θ (°)",  0.5, 360.0,    self.angle, "%.3f",  float, "angle")
-
-        # ── Presets (2×2 grid) ───────────────────────────────────────────────
-        ax_pre = self.fig.add_subplot(ctrl[4], facecolor=CTRL_BG)
-        ax_pre.set_axis_off()
-        ax_p0 = ax_pre.inset_axes([0.01, 0.52, 0.48, 0.44])
-        ax_p1 = ax_pre.inset_axes([0.51, 0.52, 0.48, 0.44])
-        ax_p2 = ax_pre.inset_axes([0.01, 0.04, 0.48, 0.44])
-        ax_p3 = ax_pre.inset_axes([0.51, 0.04, 0.48, 0.44])
-
-        # Store as instance attrs to prevent garbage collection
-        self._btn_sun  = plain_btn(ax_p0, "Sunflower \u2605")
-        self._btn_alt  = plain_btn(ax_p1, "Alt. golden")
-        self._btn_pent = plain_btn(ax_p2, "Pentagon")
-        self._btn_gal  = plain_btn(ax_p3, "Galaxy")
-
-        self._btn_sun.on_clicked( lambda _: self._preset(GOLDEN_ANGLE, 0.5))
-        self._btn_alt.on_clicked( lambda _: self._preset(ALT_GOLDEN,   0.5))
-        self._btn_pent.on_clicked(lambda _: self._preset(144.0,         0.5))
-        self._btn_gal.on_clicked( lambda _: self._preset(GOLDEN_ANGLE,  1.0))
-
-        # ── Visual style ─────────────────────────────────────────────────────
-        hdr(5, "Visual style")
-
-        self.sl_lw, self.tb_lw = self._slider_tb_row(ctrl, 6,
-            "Line w", 0.1, 8.0, self.line_width, "%.1f", float, "line_width")
-
-        ax_la = self.fig.add_subplot(ctrl[7], facecolor=CTRL_BG)
-        self.sl_la = self._plain_slider(ax_la, "Alpha", 0.0, 1.0,
-                                        self.line_alpha, "%.2f")
-        self.sl_la.on_changed(lambda v: self._set(line_alpha=float(v)))
-
-        ax_ds = self.fig.add_subplot(ctrl[8], facecolor=CTRL_BG)
-        self.sl_ds = self._plain_slider(ax_ds, "Dot sz", 0.5, 30.0,
-                                        self.dot_size, "%.1f")
-        self.sl_ds.on_changed(lambda v: self._set(dot_size=float(v)))
-
-        # Display mode buttons
-        ax_mode = self.fig.add_subplot(ctrl[9], facecolor=CTRL_BG)
-        ax_mode.set_axis_off()
-        ax_md = ax_mode.inset_axes([0.01, 0.1, 0.32, 0.8])
-        ax_ml = ax_mode.inset_axes([0.34, 0.1, 0.32, 0.8])
-        ax_mb = ax_mode.inset_axes([0.67, 0.1, 0.32, 0.8])
-
-        self._mode_btns = {
-            "Dots": plain_btn(ax_md, "Dots", self.mode == "Dots"),
-            "Line": plain_btn(ax_ml, "Line", self.mode == "Line"),
-            "Both": plain_btn(ax_mb, "Both", self.mode == "Both"),
-        }
-        for label, btn in self._mode_btns.items():
-            btn.on_clicked(lambda _, lbl=label: self._set_mode(lbl))
-
-        # ── Palette ──────────────────────────────────────────────────────────
-        hdr(10, "Palette")
-        ax_pal = self.fig.add_subplot(ctrl[11], facecolor=CTRL_BG)
-        self.radio_pal = RadioButtons(
-            ax_pal, self.PALETTES,
-            active=self.PALETTES.index(self.palette),
-            activecolor=GOLD,
-        )
-        for lbl in self.radio_pal.labels:
-            lbl.set_color(CTRL_FG)
-            lbl.set_fontsize(8.5)
-        self.radio_pal.on_clicked(lambda lbl: self._set(palette=lbl))
-
-        ax_rev = self.fig.add_subplot(ctrl[12], facecolor=CTRL_BG)
-        self.btn_reverse = plain_btn(ax_rev, "Reverse: OFF")
-        self.btn_reverse.on_clicked(self._toggle_reverse)
-
-        # ── Background ───────────────────────────────────────────────────────
-        hdr(13, "Background")
-        ax_bg = self.fig.add_subplot(ctrl[14], facecolor=CTRL_BG)
-        ax_bg.set_axis_off()
-        ax_bk = ax_bg.inset_axes([0.01, 0.1, 0.48, 0.8])
-        ax_bw = ax_bg.inset_axes([0.51, 0.1, 0.48, 0.8])
-        self._btn_bg_dark  = plain_btn(ax_bk, "Dark",  active=True)
-        self._btn_bg_light = plain_btn(ax_bw, "Light", active=False)
-        self._btn_bg_dark.on_clicked( lambda _: self._set_bg(DARK_BG))
-        self._btn_bg_light.on_clicked(lambda _: self._set_bg(LIGHT_BG))
-
-        # ── Export ───────────────────────────────────────────────────────────
-        hdr(15, "Export")
-        ax_exp = self.fig.add_subplot(ctrl[16], facecolor=CTRL_BG)
-        ax_exp.set_axis_off()
-
-        ax_d150 = ax_exp.inset_axes([0.01, 0.52, 0.30, 0.44])
-        ax_d300 = ax_exp.inset_axes([0.33, 0.52, 0.30, 0.44])
-        ax_d600 = ax_exp.inset_axes([0.65, 0.52, 0.34, 0.44])
-        ax_save = ax_exp.inset_axes([0.01, 0.04, 0.98, 0.44])
-
-        self._dpi_buttons = {
-            150: plain_btn(ax_d150, "150 dpi"),
-            300: plain_btn(ax_d300, "300 dpi", active=True),
-            600: plain_btn(ax_d600, "600 dpi"),
-        }
-        for dpi, btn in self._dpi_buttons.items():
-            btn.on_clicked(lambda _, d=dpi: self._set_dpi(d))
-
-        self.btn_export = plain_btn(ax_save, "Export PNG")
-        self.btn_export.on_clicked(self._export)
-
-        # ── Title ────────────────────────────────────────────────────────────
-        self.title = self.fig.text(
-            0.38, 0.975, "", ha="center", va="top",
-            color=GOLD, fontsize=12, fontweight="bold",
+        self._title_text = self.fig.text(
+            0.5, 0.985, "", ha="center", va="top",
+            color=GOLD, fontsize=11, fontweight="bold",
         )
 
-    # ── Widget helpers ────────────────────────────────────────────────────────
+    # ── Control panel ─────────────────────────────────────────────────────────
 
-    def _slider_tb_row(self, ctrl, row, label, vmin, vmax, vinit, fmt, cast, attr):
-        """One GridSpec row: 62% slider + 33% TextBox. Returns (slider, textbox)."""
-        ax_row = self.fig.add_subplot(ctrl[row], facecolor=CTRL_BG)
-        ax_row.set_axis_off()
-        ax_sl = ax_row.inset_axes([0.00, 0.05, 0.62, 0.90])
-        ax_tb = ax_row.inset_axes([0.65, 0.10, 0.33, 0.80])
+    def _build_controls(self):
+        self._ctrl = QWidget()
+        lay = QVBoxLayout(self._ctrl)
+        lay.setContentsMargins(6, 6, 6, 6)
+        lay.setSpacing(8)
 
-        sl = Slider(ax_sl, label, vmin, vmax, valinit=vinit,
-                    color=ACC_C, track_color="#334")
-        sl.label.set_color(CTRL_FG);   sl.label.set_fontsize(8)
-        sl.valtext.set_color(CTRL_FG); sl.valtext.set_fontsize(7)
+        # ── Spiral formula ─────────────────────────────────────────────────
+        grp_f = QGroupBox("Spiral Formula")
+        fl    = QVBoxLayout(grp_f)
+        self.sl_n     = _IntParamSlider("N points", 10, self.MAX_N, self.n)
+        self.sl_rexp  = _ParamSlider("r exponent  p", 0.1, 3.0, self.r_exp)
+        self.sl_angle = _ParamSlider("θ step  (°)", 0.5, 360.0, self.angle, decimals=3)
+        for w in (self.sl_n, self.sl_rexp, self.sl_angle):
+            fl.addWidget(w)
+        self.sl_n.valueChanged.connect(    lambda v: self._physics_changed("n", int(v)))
+        self.sl_rexp.valueChanged.connect( lambda v: self._physics_changed("r_exp", v))
+        self.sl_angle.valueChanged.connect(lambda v: self._physics_changed("angle", v))
+        lay.addWidget(grp_f)
 
-        tb = TextBox(ax_tb, "", initial=fmt % vinit, textalignment="center")
-        tb.text_disp.set_color(CTRL_FG)
-        tb.ax.set_facecolor("#1a1a2e")
+        # ── Presets ────────────────────────────────────────────────────────
+        grp_p = QGroupBox("Presets")
+        pg    = QGridLayout(grp_p)
+        pg.setSpacing(4)
+        for i, (label, ang, rexp) in enumerate([
+            ("Sunflower \u2605", GOLDEN_ANGLE, 0.5),
+            ("Alt. golden",      ALT_GOLDEN,   0.5),
+            ("Pentagon",         144.0,         0.5),
+            ("Galaxy",           GOLDEN_ANGLE,  1.0),
+        ]):
+            btn = QPushButton(label)
+            btn.clicked.connect(lambda _, a=ang, r=rexp: self._preset(a, r))
+            pg.addWidget(btn, i // 2, i % 2)
+        lay.addWidget(grp_p)
 
-        def on_sl_changed(val):
-            setattr(self, attr, cast(val))
-            if not self._batch:
-                tb.set_val(fmt % cast(val))
-                self._draw()
+        # ── Visual style ───────────────────────────────────────────────────
+        grp_v = QGroupBox("Visual Style")
+        vl    = QVBoxLayout(grp_v)
+        self.sl_lw    = _ParamSlider("Line width",  0.1, 8.0,  self.line_width, decimals=1)
+        self.sl_alpha = _ParamSlider("Alpha",        0.0, 1.0,  self.line_alpha, decimals=2)
+        self.sl_dot   = _ParamSlider("Dot size",     0.5, 30.0, self.dot_size,   decimals=1)
+        for w in (self.sl_lw, self.sl_alpha, self.sl_dot):
+            vl.addWidget(w)
+        self.sl_lw.valueChanged.connect(   lambda v: self._visual_changed("line_width", v))
+        self.sl_alpha.valueChanged.connect(lambda v: self._visual_changed("line_alpha", v))
+        self.sl_dot.valueChanged.connect(  lambda v: self._visual_changed("dot_size", v))
 
-        def on_tb_submit(text):
-            try:
-                v = float(text.strip())
-                v = max(vmin, min(vmax, v))
-                sl.set_val(cast(v))         # triggers on_sl_changed → redraw
-            except ValueError:
-                tb.set_val(fmt % getattr(self, attr))   # revert bad input
+        mode_row = QWidget()
+        ml = QHBoxLayout(mode_row)
+        ml.setContentsMargins(0, 2, 0, 2)
+        ml.setSpacing(4)
+        self._mode_btns = {}
+        for m in ("Dots", "Line", "Both"):
+            btn = QPushButton(m)
+            btn.setCheckable(True)
+            btn.setChecked(m == self.mode)
+            btn.clicked.connect(lambda _, lbl=m: self._set_mode(lbl))
+            ml.addWidget(btn)
+            self._mode_btns[m] = btn
+        vl.addWidget(mode_row)
+        lay.addWidget(grp_v)
 
-        sl.on_changed(on_sl_changed)
-        tb.on_submit(on_tb_submit)
-        return sl, tb
+        # ── Palette ────────────────────────────────────────────────────────
+        grp_pal = QGroupBox("Palette")
+        pl      = QVBoxLayout(grp_pal)
+        self._cb_palette = QComboBox()
+        self._cb_palette.addItems(self.PALETTES)
+        self._cb_palette.setCurrentIndex(self.PALETTES.index(self.palette))
+        self._cb_palette.currentTextChanged.connect(
+            lambda t: self._visual_changed("palette", t))
+        pl.addWidget(self._cb_palette)
 
-    def _plain_slider(self, ax, label, vmin, vmax, vinit, fmt):
-        sl = Slider(ax, label, vmin, vmax, valinit=vinit,
-                    color=ACC_C, track_color="#334")
-        sl.label.set_color(CTRL_FG);   sl.label.set_fontsize(8)
-        sl.valtext.set_color(CTRL_FG); sl.valtext.set_fontsize(8)
-        return sl
+        self._chk_rev = QCheckBox("Reverse palette")
+        self._chk_rev.setChecked(self.reverse_pal)
+        self._chk_rev.toggled.connect(lambda v: self._visual_changed("reverse_pal", bool(v)))
+        pl.addWidget(self._chk_rev)
+        lay.addWidget(grp_pal)
 
-    # ── Coordinate computation ────────────────────────────────────────────────
+        # ── Background ─────────────────────────────────────────────────────
+        grp_bg = QGroupBox("Background")
+        bl     = QHBoxLayout(grp_bg)
+        self._btn_dark  = QPushButton("Dark")
+        self._btn_light = QPushButton("Light")
+        for b in (self._btn_dark, self._btn_light):
+            b.setCheckable(True)
+        self._btn_dark.setChecked(True)
+        self._btn_dark.clicked.connect( lambda: self._set_bg(DARK_BG))
+        self._btn_light.clicked.connect(lambda: self._set_bg(LIGHT_BG))
+        bl.addWidget(self._btn_dark)
+        bl.addWidget(self._btn_light)
+        lay.addWidget(grp_bg)
 
-    def _coords(self):
-        k     = np.arange(1, self.n + 1, dtype=float)
-        r     = k ** self.r_exp
-        theta = np.radians(k * self.angle)
+        # ── Export ─────────────────────────────────────────────────────────
+        grp_exp = QGroupBox("Export")
+        el      = QVBoxLayout(grp_exp)
+        self._btn_export = QPushButton("Export PNG…")
+        self._btn_export.clicked.connect(self._open_export)
+        el.addWidget(self._btn_export)
+        self._lbl_status = QLabel("")
+        self._lbl_status.setWordWrap(True)
+        el.addWidget(self._lbl_status)
+        lay.addWidget(grp_exp)
+
+        lay.addStretch()
+
+    def _wire_layout(self):
+        central = QWidget()
+        self.setCentralWidget(central)
+        hl = QHBoxLayout(central)
+        hl.setContentsMargins(4, 4, 4, 4)
+        hl.setSpacing(4)
+        hl.addWidget(self._canvas, 3)
+
+        scroll = QScrollArea()
+        scroll.setWidgetResizable(True)
+        scroll.setFixedWidth(300)
+        scroll.setWidget(self._ctrl)
+        hl.addWidget(scroll)
+
+    # ── Computation (background thread) ───────────────────────────────────────
+
+    @staticmethod
+    def _compute_coords(n, r_exp, angle):
+        k     = np.arange(1, n + 1, dtype=float)
+        r     = k ** r_exp
+        theta = np.radians(k * angle)
         return r * np.cos(theta), r * np.sin(theta)
 
     def _palette_colors(self, n):
@@ -296,140 +561,126 @@ class SpiralArtist:
             t = 1 - t
         return plt.get_cmap(self.palette)(t)
 
-    # ── Draw helpers ──────────────────────────────────────────────────────────
+    def _start_compute(self):
+        self._generation += 1
+        gen    = self._generation
+        n      = self.n
+        r_exp  = self.r_exp
+        angle  = self.angle
+        bridge = self._bridge
 
-    def _draw_gradient_line(self, ax, xs, ys):
-        n        = len(xs)
-        points   = np.column_stack([xs, ys]).reshape(-1, 1, 2)
-        segments = np.concatenate([points[:-1], points[1:]], axis=1)
-        colors   = self._palette_colors(n)
-        lc = LineCollection(
-            segments, colors=colors[:-1],
-            linewidth=self.line_width, alpha=self.line_alpha,
-            capstyle="round",
-        )
-        ax.add_collection(lc)
+        def worker():
+            try:
+                xs, ys = SpiralArtist._compute_coords(n, r_exp, angle)
+                if gen == self._generation:
+                    bridge.finished.emit((xs, ys))
+            except Exception as exc:
+                bridge.error.emit(str(exc))
 
-    def _draw_dots(self, ax, xs, ys):
-        colors = self._palette_colors(len(xs))
-        ax.scatter(xs, ys, c=colors, s=self.dot_size,
-                   linewidths=0, rasterized=True)
+        threading.Thread(target=worker, daemon=True).start()
 
-    def _draw_spiral(self, ax):
-        xs, ys = self._coords()
+    def _on_compute_done(self, result):
+        self._last_coords = result
+        self._render(*result)
+
+    def _on_compute_error(self, msg):
+        self._lbl_status.setText(f"Render error: {msg}")
+
+    # ── Rendering (main thread) ───────────────────────────────────────────────
+
+    def _render(self, xs, ys):
+        ax = self.ax
+        ax.cla()
+        ax.set_facecolor(self.plot_bg)
+        ax.set_aspect("equal")
+        ax.axis("off")
+        self.fig.patch.set_facecolor(self.plot_bg)
+
         if self.mode in ("Line", "Both"):
-            self._draw_gradient_line(ax, xs, ys)
+            colors = self._palette_colors(len(xs))
+            pts    = np.column_stack([xs, ys]).reshape(-1, 1, 2)
+            segs   = np.concatenate([pts[:-1], pts[1:]], axis=1)
+            lc = LineCollection(segs, colors=colors[:-1],
+                                linewidth=self.line_width, alpha=self.line_alpha,
+                                capstyle="round")
+            ax.add_collection(lc)
+
         if self.mode in ("Dots", "Both"):
-            self._draw_dots(ax, xs, ys)
+            colors = self._palette_colors(len(xs))
+            ax.scatter(xs, ys, c=colors, s=self.dot_size,
+                       linewidths=0, rasterized=True)
+
         ax.autoscale_view()
-
-    # ── Main draw ─────────────────────────────────────────────────────────────
-
-    def _draw(self):
-        if self._batch:
-            return
-        self._drawing = True
-
-        self.ax.cla()
-        self.ax.set_facecolor(self.plot_bg)
-        self.ax.set_aspect("equal")
-        for sp in self.ax.spines.values():
-            sp.set_visible(False)
-        self.ax.set_xticks([])
-        self.ax.set_yticks([])
-
-        self._draw_spiral(self.ax)
-
-        self.title.set_text(
-            f"r = k^{self.r_exp:.2f},  θ = k × {self.angle:.3f}°"
+        self._title_text.set_text(
+            f"r = k^{self.r_exp:.2f}   θ = k × {self.angle:.3f}°"
             f"   ·   {self.n:,} pts   ·   {self.palette}"
         )
-
-        self._drawing = False
-        self.fig.canvas.draw_idle()
+        self._canvas.draw_idle()
 
     # ── Callbacks ─────────────────────────────────────────────────────────────
 
-    def _set(self, **kwargs):
-        for k, v in kwargs.items():
-            setattr(self, k, v)
-        self._draw()
+    def _physics_changed(self, attr, val):
+        setattr(self, attr, val)
+        self._render_timer.start()          # debounced thread launch
+
+    def _visual_changed(self, attr, val):
+        setattr(self, attr, val)
+        if self._last_coords is not None:
+            self._render(*self._last_coords)    # instant, no thread
+        else:
+            self._render_timer.start()
 
     def _set_mode(self, mode):
         self.mode = mode
         for lbl, btn in self._mode_btns.items():
-            btn.ax.set_facecolor(BTN_ON if lbl == mode else BTN_OFF)
-        self._draw()
+            btn.setChecked(lbl == mode)
+        if self._last_coords is not None:
+            self._render(*self._last_coords)
+        else:
+            self._render_timer.start()
 
     def _preset(self, angle, r_exp):
-        """Apply a two-parameter preset with a single redraw."""
-        self._batch = True
-        self.angle  = angle
-        self.r_exp  = r_exp
-        self.sl_angle.set_val(angle)
-        self.sl_rexp.set_val(r_exp)
-        self._batch = False
-        # Sync textboxes manually (on_changed was suppressed during batch)
-        self.tb_angle.set_val("%.3f" % angle)
-        self.tb_rexp.set_val("%.2f"  % r_exp)
-        self._draw()
-
-    def _toggle_reverse(self, _event):
-        self.reverse_pal = not self.reverse_pal
-        self.btn_reverse.ax.set_facecolor(BTN_ON if self.reverse_pal else BTN_OFF)
-        self.btn_reverse.label.set_text(
-            "Reverse: ON" if self.reverse_pal else "Reverse: OFF"
-        )
-        self._draw()
+        self.angle = angle
+        self.r_exp = r_exp
+        self.sl_angle.set_value(angle)
+        self.sl_rexp.set_value(r_exp)
+        self._render_timer.start()
 
     def _set_bg(self, color):
         self.plot_bg = color
-        is_dark = (color == DARK_BG)
-        self._btn_bg_dark.ax.set_facecolor( BTN_ON  if is_dark else BTN_OFF)
-        self._btn_bg_light.ax.set_facecolor(BTN_OFF if is_dark else BTN_ON)
-        self._draw()
+        self._btn_dark.setChecked( color == DARK_BG)
+        self._btn_light.setChecked(color == LIGHT_BG)
+        if self._last_coords is not None:
+            self._render(*self._last_coords)
+        else:
+            self._render_timer.start()
 
-    def _set_dpi(self, dpi):
-        self.export_dpi = dpi
-        for d, btn in self._dpi_buttons.items():
-            btn.ax.set_facecolor(BTN_ON if d == dpi else BTN_OFF)
-        self.fig.canvas.draw_idle()
+    def _open_export(self):
+        dlg = _ExportDialog(self, parent=self)
+        self._export_bridge.finished.connect(dlg.on_export_done)
+        self._export_bridge.error.connect(dlg.on_export_error)
+        self._export_bridge.finished.connect(self._on_export_status)
+        self._export_bridge.error.connect(self._on_export_error)
+        dlg.exec_()
+        try:
+            self._export_bridge.finished.disconnect(dlg.on_export_done)
+            self._export_bridge.error.disconnect(dlg.on_export_error)
+            self._export_bridge.finished.disconnect(self._on_export_status)
+            self._export_bridge.error.disconnect(self._on_export_error)
+        except TypeError:
+            pass
 
-    def _export(self, _event):
-        dpi  = self.export_dpi
-        size = 12   # inches → 1800 / 3600 / 7200 px at 150 / 300 / 600 dpi
+    def _on_export_status(self, fname):
+        self._lbl_status.setText(f"Saved: {fname}")
 
-        fig = plt.figure(figsize=(size, size), facecolor=self.plot_bg)
-        ax  = fig.add_axes([0, 0, 1, 1], facecolor=self.plot_bg)
-        ax.set_aspect("equal")
-        ax.axis("off")
-
-        self._draw_spiral(ax)
-
-        pal   = self.palette[:4]
-        rev   = "r" if self.reverse_pal else ""
-        bg    = "lite" if self.plot_bg == LIGHT_BG else "dark"
-        fname = (
-            f"spiral_{self.angle:.2f}deg"
-            f"_p{self.r_exp:.2f}"
-            f"_N{self.n}"
-            f"_{pal}{rev}"
-            f"_{bg}_{dpi}dpi.png"
-        )
-        fig.savefig(fname, dpi=dpi, bbox_inches="tight", pad_inches=0.05)
-        plt.close(fig)
-
-        self.btn_export.label.set_text("Saved \u2713")
-        self.fig.canvas.draw_idle()
-
-    # ── Launch ────────────────────────────────────────────────────────────────
-
-    def show(self):
-        plt.show()
+    def _on_export_error(self, msg):
+        self._lbl_status.setText(f"Export error: {msg}")
 
 
-# ── Entry point ────────────────────────────────────────────────────────────────
-
+# ── Entry point ──────────────────────────────────────────────────────────────────
 if __name__ == "__main__":
-    artist = SpiralArtist()
-    artist.show()
+    app = QApplication(sys.argv)
+    app.setStyle("Fusion")
+    win = SpiralArtist()
+    win.show()
+    sys.exit(app.exec_())
