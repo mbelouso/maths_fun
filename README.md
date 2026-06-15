@@ -19,6 +19,7 @@ Some fun ways to look at numbers and shapes — interactive visualizations of pr
 | `3_body_problem.py` | Interactive 3D three-body gravitational simulator — 7 presets, real-time collision handling, MP4 export |
 | `three_body_physics.py` | Physics engine for `3_body_problem.py` — ODE integration, collision detection, body colour/size helpers |
 | `complex_power_iterator.py` | Complex power iterator — iterate z→z^p on the complex plane with chained-vector visualisation; 9 presets across escape/spiral/converge behaviours |
+| `double_slit_explorer.py` | Double-slit experiment simulator — PyQt5 controls for slit geometry and detector distance, single or band wavelengths, 3D diffraction intensity surface |
 | `prime_gallery_100.py` | Static three-panel figure showing integers 1–100 across all three spirals |
 
 ---
@@ -234,6 +235,37 @@ Two fully independent spirals rendered simultaneously and alpha-blended together
 **Export PNG** — renders a clean 12 × 12 inch image at the chosen DPI to the current directory. Rendering runs off the main thread so the UI stays live.
 
 Default startup: Spiral 1 at golden angle (plasma), Spiral 2 at alternate golden angle (viridis), blend at 0.5 — two complementary sunflowers overlaid.
+
+---
+
+### Double-slit explorer — `double_slit_explorer.py`
+
+```bash
+conda activate maths_fun
+python double_slit_explorer.py
+```
+
+Interactive PyQt5 simulation of the optical double-slit experiment with a 3D detector visualization.
+
+**Physics model**
+- **Fraunhofer** — far-field analytic form with finite slit width/height envelope and two-slit interference term.
+- **Fresnel** — near-field paraxial propagation via numerical aperture integration.
+
+**Controls**
+- **Slit separation** (distance between slit centers)
+- **Slit width / height** (finite rectangular slits)
+- **Detector distance** (slits to detector plane)
+- **Detector span / resolution** (plot area and grid density)
+- **Wavelength source**: single wavelength or uniformly sampled wavelength band
+
+**Output**
+- 3D matplotlib surface where detector **X-Y** are spatial coordinates and **Z** is normalized intensity.
+- Optional log intensity display to reveal weaker fringes.
+- Plot controls for colormap selection, axis-grid visibility, and surface sampling density.
+- Display tone-mapping controls for smoother color transitions (log strength, gamma, Gaussian smoothing sigma).
+- Scrollable control pane for better usability on 1080p displays.
+- PNG export with selectable DPI presets (150/300/600).
+- Separate 2D heatmap export for higher-quality continuous color output than matplotlib's 3D surface renderer.
 
 ---
 
